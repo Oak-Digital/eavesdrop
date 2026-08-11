@@ -1,0 +1,58 @@
+[package]
+name = "eavesdrop"
+version = "0.1.8"
+description = "A private cross-platform meeting recorder"
+authors = ["Eavesdrop"]
+edition = "2024"
+rust-version = "1.85"
+
+[lib]
+name = "eavesdrop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = []
+aec3 = ["dep:webrtc-audio-processing", "dep:webrtc-audio-processing-config"]
+
+[build-dependencies]
+tauri-build = { version = "2.5", features = [] }
+
+[dependencies]
+aes-gcm = "0.10"
+base64 = "0.22"
+bytes = "1.11"
+chrono = { version = "0.4", features = ["serde"] }
+cpal = "0.18"
+fs2 = "0.4"
+keyring = { version = "3.6", features = ["apple-native", "windows-native"] }
+mp4 = "0.14"
+rand = "0.9"
+rusqlite = { version = "0.38", features = ["bundled", "chrono"] }
+rusty_aac = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2.11", features = ["tray-icon", "macos-private-api"] }
+tauri-plugin-autostart = "2.5"
+tauri-plugin-dialog = "2.6"
+tauri-plugin-global-shortcut = "2.3"
+tauri-plugin-notification = "2.3"
+thiserror = "2"
+uuid = { version = "1.21", features = ["v4", "serde"] }
+webrtc-audio-processing = { version = "2.1", features = ["bundled"], optional = true }
+webrtc-audio-processing-config = { version = "2.1", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+screencapturekit = { version = "8.0", features = ["macos_13_0"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wasapi = "0.23"
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_Media_Audio",
+  "Win32_System_Com",
+  "Win32_System_Threading",
+  "Win32_UI_WindowsAndMessaging"
+] }
+
+[dev-dependencies]
+tempfile = "3.26"

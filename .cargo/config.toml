@@ -1,0 +1,5 @@
+[env]
+# Keep Rust, Swift, and the final linker on the same supported deployment
+# target. This also makes the Swift concurrency load command resolve to the
+# macOS system runtime instead of the legacy Xcode compatibility runtime.
+MACOSX_DEPLOYMENT_TARGET = { value = "13.0", force = true }

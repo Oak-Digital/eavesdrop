@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>LSUIElement</key>
+  <true/>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Eavesdrop uses the selected microphone to record meetings you choose to capture.</string>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>Eavesdrop uses screen recording access only to capture computer audio from online meetings. It does not store video.</string>
+</dict>
+</plist>
