@@ -1,6 +1,6 @@
 [package]
 name = "eavesdrop"
-version = "0.1.8"
+version = "0.1.9"
 description = "A private cross-platform meeting recorder"
 authors = ["Eavesdrop"]
 edition = "2024"
@@ -36,6 +36,8 @@ tauri-plugin-autostart = "2.5"
 tauri-plugin-dialog = "2.6"
 tauri-plugin-global-shortcut = "2.3"
 tauri-plugin-notification = "2.3"
+tauri-plugin-process = "2.3.1"
+tauri-plugin-updater = "2.10.1"
 thiserror = "2"
 uuid = { version = "1.21", features = ["v4", "serde"] }
 webrtc-audio-processing = { version = "2.1", features = ["bundled"], optional = true }

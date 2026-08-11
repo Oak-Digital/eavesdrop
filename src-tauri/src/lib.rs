@@ -23,6 +23,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
@@ -47,6 +49,8 @@ pub fn run() {
             commands::get_recording_audio,
             commands::open_library,
             commands::hide_quick_panel,
+            commands::begin_update_install,
+            commands::cancel_update_install,
             commands::dismiss_meeting,
             commands::export_diagnostics,
             commands::open_screen_recording_settings,

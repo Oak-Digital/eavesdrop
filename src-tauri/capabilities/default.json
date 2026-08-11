@@ -12,6 +12,8 @@
     "autostart:allow-is-enabled",
     "global-shortcut:allow-register",
     "global-shortcut:allow-unregister",
-    "notification:default"
+    "notification:default",
+    "process:allow-restart",
+    "updater:default"
   ]
 }

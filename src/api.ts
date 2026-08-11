@@ -199,6 +199,14 @@ export async function hideQuickPanel(): Promise<void> {
   if (isTauri()) await command<void>("hide_quick_panel");
 }
 
+export async function beginUpdateInstall(): Promise<void> {
+  if (isTauri()) await command<void>("begin_update_install");
+}
+
+export async function cancelUpdateInstall(): Promise<void> {
+  if (isTauri()) await command<void>("cancel_update_install");
+}
+
 export async function onSessionChanged(handler: (session: RecordingSession) => void): Promise<UnlistenFn> {
   if (!isTauri()) return () => undefined;
   return listen<RecordingSession>("recording-state-changed", (event) => handler(event.payload));

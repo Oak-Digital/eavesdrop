@@ -26,6 +26,7 @@ struct RuntimeState {
     active: Option<ActiveRecording>,
     last_ready_id: Option<String>,
     error: Option<String>,
+    update_installing: bool,
 }
 
 struct ActiveRecording {
@@ -53,6 +54,7 @@ impl AppState {
                 active: None,
                 last_ready_id: None,
                 error: None,
+                update_installing: false,
             }),
         };
         state.recover_unfinished()?;
@@ -101,14 +103,7 @@ impl AppState {
             .runtime
             .lock()
             .map_err(|_| AppError::State("recording lock poisoned".into()))?;
-        if runtime.active.is_some()
-            || !matches!(
-                runtime.phase,
-                RecordingPhase::Idle | RecordingPhase::Ready | RecordingPhase::Failed
-            )
-        {
-            return Err(AppError::State("a recording is already active".into()));
-        }
+        ensure_recording_can_start(&runtime)?;
         runtime.phase = RecordingPhase::Starting;
         runtime.error = None;
         let id = uuid::Uuid::new_v4().to_string();
@@ -282,6 +277,26 @@ impl AppState {
             .unwrap_or(true)
     }
 
+    pub fn begin_update_install(&self) -> AppResult<()> {
+        let mut runtime = self
+            .runtime
+            .lock()
+            .map_err(|_| AppError::State("recording lock poisoned".into()))?;
+        if runtime.active.is_some() {
+            return Err(AppError::State(
+                "stop the active recording before installing the update".into(),
+            ));
+        }
+        runtime.update_installing = true;
+        Ok(())
+    }
+
+    pub fn cancel_update_install(&self) {
+        if let Ok(mut runtime) = self.runtime.lock() {
+            runtime.update_installing = false;
+        }
+    }
+
     fn recover_unfinished(&self) -> AppResult<()> {
         for id in self.repository.unfinished_recordings()? {
             let secrets = self.repository.secrets(&id)?;
@@ -352,4 +367,40 @@ fn emit_session(app: &AppHandle, runtime: &RuntimeState) -> AppResult<RecordingS
     app.emit("recording-state-changed", &session)
         .map_err(|error| AppError::Other(error.to_string()))?;
     Ok(session)
+}
+
+fn ensure_recording_can_start(runtime: &RuntimeState) -> AppResult<()> {
+    if runtime.update_installing {
+        return Err(AppError::State(
+            "an application update is being installed".into(),
+        ));
+    }
+    if runtime.active.is_some()
+        || !matches!(
+            runtime.phase,
+            RecordingPhase::Idle | RecordingPhase::Ready | RecordingPhase::Failed
+        )
+    {
+        return Err(AppError::State("a recording is already active".into()));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_install_lock_blocks_new_recordings() {
+        let mut runtime = RuntimeState {
+            phase: RecordingPhase::Idle,
+            active: None,
+            last_ready_id: None,
+            error: None,
+            update_installing: false,
+        };
+        assert!(ensure_recording_can_start(&runtime).is_ok());
+        runtime.update_installing = true;
+        assert!(ensure_recording_can_start(&runtime).is_err());
+    }
 }

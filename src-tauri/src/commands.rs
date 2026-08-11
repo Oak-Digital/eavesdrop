@@ -161,6 +161,16 @@ pub fn hide_quick_panel(app: AppHandle) -> AppResult<()> {
 }
 
 #[tauri::command]
+pub fn begin_update_install(state: State<'_, AppState>) -> AppResult<()> {
+    state.begin_update_install()
+}
+
+#[tauri::command]
+pub fn cancel_update_install(state: State<'_, AppState>) {
+    state.cancel_update_install();
+}
+
+#[tauri::command]
 pub fn dismiss_meeting(detector: State<'_, MeetingDetector>, id: String) -> AppResult<()> {
     detector.dismiss(id);
     Ok(())

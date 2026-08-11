@@ -1,0 +1,135 @@
+name: Release desktop app
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - id: version
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          config_version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          cargo_version=$(sed -n '/^\[package\]/,/^\[/s/^version = "\([^"]*\)"/\1/p' src-tauri/Cargo.toml)
+          test "$version" = "$config_version"
+          test "$version" = "$cargo_version"
+          test "v$version" = "$GITHUB_REF_NAME"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build-macos:
+    needs: validate
+    runs-on: macos-latest
+    env:
+      APP_VERSION: ${{ needs.validate.outputs.version }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+      - run: npm ci
+      - run: npm run tauri build -- --target universal-apple-darwin --bundles app
+      - name: Apply stable macOS identity and package
+        shell: bash
+        run: |
+          app_path="src-tauri/target/universal-apple-darwin/release/bundle/macos/Eavesdrop.app"
+          output_dir="release"
+          archive="$output_dir/Eavesdrop_${APP_VERSION}_universal.app.tar.gz"
+          mkdir -p "$output_dir"
+          ./scripts/sign-macos-local.sh "$app_path"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          tar -czf "$archive" -C "$(dirname "$app_path")" "$(basename "$app_path")"
+          npm run tauri signer sign -- --password "" "$archive"
+          ditto -c -k --sequesterRsrc --keepParent "$app_path" "$output_dir/Eavesdrop_${APP_VERSION}_universal.zip"
+          hdiutil create -volname Eavesdrop -srcfolder "$app_path" -ov -format UDZO "$output_dir/Eavesdrop_${APP_VERSION}_universal.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eavesdrop-macos-${{ needs.validate.outputs.version }}
+          path: release/*
+          if-no-files-found: error
+
+  build-windows:
+    needs: validate
+    runs-on: windows-latest
+    env:
+      APP_VERSION: ${{ needs.validate.outputs.version }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+      - run: npm ci
+      - run: npm run tauri build -- --target x86_64-pc-windows-msvc --bundles msi
+      - name: Normalize Windows artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          $msi = Get-ChildItem "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi" | Select-Object -First 1
+          if (-not $msi) { throw "Windows MSI was not produced" }
+          $output = "release/Eavesdrop_${env:APP_VERSION}_x64_en-US.msi"
+          Copy-Item $msi.FullName $output
+          Copy-Item "$($msi.FullName).sig" "$output.sig"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eavesdrop-windows-${{ needs.validate.outputs.version }}
+          path: release/*
+          if-no-files-found: error
+
+  publish:
+    needs: [validate, build-macos, build-windows]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      APP_VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: eavesdrop-*-${{ needs.validate.outputs.version }}
+          path: release
+          merge-multiple: true
+      - name: Create signed update manifest
+        run: node scripts/create-update-manifest.mjs "$APP_VERSION" "$GITHUB_REPOSITORY" release
+      - name: Publish release
+        shell: bash
+        run: |
+          tag="v$APP_VERSION"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" release/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$tag" release/* --repo "$GITHUB_REPOSITORY" --verify-tag --draft --generate-notes --title "Eavesdrop $APP_VERSION"
+          fi
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest

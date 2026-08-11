@@ -19,6 +19,7 @@ import {
 } from "./icons";
 import type { AppSnapshot, CaptureMode, Recording } from "./types";
 import { useAppState } from "./useAppState";
+import { useUpdater } from "./useUpdater";
 
 type LibraryPage = "recordings" | "deleted" | "settings";
 const isMac = /Macintosh|Mac OS X/.test(navigator.userAgent);
@@ -34,13 +35,15 @@ function beginWindowDrag(event: React.MouseEvent<HTMLElement>) {
 export default function App() {
   const app = useAppState();
   const surface = new URLSearchParams(window.location.search).get("surface") ?? "library";
+  const updater = useUpdater(surface !== "quick");
 
   if (!app.snapshot) return <div className="loading">Opening Eavesdrop…</div>;
   if (surface === "quick") return <QuickPanel app={app} />;
-  return <LibraryApp app={app} />;
+  return <LibraryApp app={app} updater={updater} />;
 }
 
 type AppController = ReturnType<typeof useAppState>;
+type AppUpdater = ReturnType<typeof useUpdater>;
 
 function QuickPanel({ app }: { app: AppController }) {
   const { snapshot, meeting } = app;
@@ -169,7 +172,7 @@ function AudioMeter({ icon, label, value }: { icon: React.ReactNode; label: stri
   );
 }
 
-function LibraryApp({ app }: { app: AppController }) {
+function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater }) {
   const [page, setPage] = useState<LibraryPage>("recordings");
   const pageRef = useRef<LibraryPage>("recordings");
   const [recordings, setRecordings] = useState<Recording[]>([]);
@@ -295,6 +298,7 @@ function LibraryApp({ app }: { app: AppController }) {
       </aside>
 
       <section className="library-content">
+        <UpdateBanner app={app} updater={updater} />
         {app.error && <InlineError message={app.error} onClose={app.clearError} />}
         {bulkError && <InlineError message={bulkError} onClose={() => setBulkError(null)} />}
         {selected ? (
@@ -309,7 +313,7 @@ function LibraryApp({ app }: { app: AppController }) {
             onRemoved={async () => { setSelected(null); await reload(); }}
           />
         ) : page === "settings" ? (
-          <SettingsPage app={app} />
+          <SettingsPage app={app} updater={updater} />
         ) : (
           <>
             <header className="content-header">
@@ -465,8 +469,19 @@ function EncryptedAudioPlayer({ recording }: { recording: Recording }) {
   );
 }
 
-function SettingsPage({ app }: { app: AppController }) {
+function SettingsPage({ app, updater }: { app: AppController; updater: AppUpdater }) {
   const snapshot = app.snapshot!;
+  const recordingActive = ["starting", "recording", "paused", "finalizing"].includes(snapshot.session.phase);
+  const update = updater.state;
+  const updateDescription = update.phase === "available"
+    ? `Version ${update.availableVersion} is ready to download.`
+    : update.phase === "downloading"
+      ? update.progress === null ? "Downloading update…" : `Downloading update… ${update.progress}%`
+      : update.phase === "up_to_date"
+        ? "You have the latest version."
+        : update.phase === "error"
+          ? update.error ?? "The update check failed."
+          : "Eavesdrop checks for signed updates when it starts.";
   return (
     <div className="settings-page">
       <header className="content-header"><div><h1>Settings</h1><p>Recording sources and app behavior.</p></div></header>
@@ -480,6 +495,20 @@ function SettingsPage({ app }: { app: AppController }) {
         <SettingToggle label="Launch at login" description="Keep the recorder available in the menu bar or system tray." checked={snapshot.settings.launchAtLogin} onChange={(launchAtLogin) => app.updateSettings({ launchAtLogin })} />
       </section>
       <section className="settings-section">
+        <h2>Updates</h2>
+        <div className="update-setting">
+          <div><strong>Eavesdrop {update.currentVersion || ""}</strong><p>{recordingActive && update.phase === "available" ? "Stop the active recording before updating." : update.error && update.phase === "available" ? update.error : updateDescription}</p></div>
+          {update.phase === "available" || update.phase === "downloading" ? (
+            <button className="button primary" disabled={recordingActive || update.phase === "downloading"} onClick={updater.installUpdate}>
+              {update.phase === "downloading" ? `${update.progress ?? 0}%` : "Update & restart"}
+            </button>
+          ) : (
+            <button className="button secondary" disabled={update.phase === "checking"} onClick={updater.checkForUpdates}>{update.phase === "checking" ? "Checking…" : "Check for updates"}</button>
+          )}
+        </div>
+        {update.phase === "downloading" && <progress className="update-progress" max={100} value={update.progress ?? undefined} aria-label="Update download progress" />}
+      </section>
+      <section className="settings-section">
         <h2>Permissions</h2>
         <PermissionRow label="Microphone" state={snapshot.permissions.microphone} />
         <PermissionRow label="Computer audio" state={snapshot.permissions.systemAudio} />
@@ -490,6 +519,18 @@ function SettingsPage({ app }: { app: AppController }) {
         <p className="settings-description">Local event logs exclude audio, keys, meeting titles, and window contents. Logs expire after seven days.</p>
         <button className="button secondary" onClick={() => api.exportDiagnostics()}>Export diagnostics</button>
       </section>
+    </div>
+  );
+}
+
+function UpdateBanner({ app, updater }: { app: AppController; updater: AppUpdater }) {
+  const update = updater.state;
+  if (update.phase !== "available" && update.phase !== "downloading") return null;
+  const recordingActive = ["starting", "recording", "paused", "finalizing"].includes(app.snapshot!.session.phase);
+  return (
+    <div className="update-banner" role="status">
+      <div><strong>Eavesdrop {update.availableVersion} is available</strong><span>{recordingActive ? "Stop recording before updating." : update.phase === "downloading" ? `Downloading… ${update.progress ?? 0}%` : update.error ?? "The app will restart after installation."}</span></div>
+      <button className="button primary" disabled={recordingActive || update.phase === "downloading"} onClick={updater.installUpdate}>{update.phase === "downloading" ? `${update.progress ?? 0}%` : "Update now"}</button>
     </div>
   );
 }
