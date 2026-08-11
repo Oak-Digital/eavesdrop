@@ -1,7 +1,7 @@
 {
   "name": "eavesdrop",
   "private": true,
-  "version": "0.1.10",
+  "version": "0.1.11",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +9,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "tauri": "tauri",
-    "bundle:mac": "tauri build --bundles app --config '{\"bundle\":{\"createUpdaterArtifacts\":false}}' && ./scripts/sign-macos-local.sh",
+    "bundle:mac": "tauri build --bundles app --config '{\"bundle\":{\"createUpdaterArtifacts\":false,\"macOS\":{\"signingIdentity\":\"-\"}}}' && ./scripts/sign-macos-local.sh",
     "version:set": "node scripts/set-version.mjs"
   },
   "dependencies": {

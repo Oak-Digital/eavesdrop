@@ -46,13 +46,44 @@ rustup target add x86_64-pc-windows-msvc
 npm run tauri build -- --target x86_64-pc-windows-msvc --bundles msi
 ```
 
-Tauri signs the macOS bundle when an Apple Developer signing identity is available. Windows signing should be connected to the organization's certificate provider through Tauri's `bundle.windows.signCommand`. Signing identities, notarization credentials, and code-signing certificates are intentionally not stored in this repository.
+Local macOS builds use an ad-hoc signature and are intended only for development. Public macOS builds must use the Developer ID and notarization setup below. Windows signing should be connected to the organization's certificate provider through Tauri's `bundle.windows.signCommand`. Signing identities, notarization credentials, and code-signing certificates are intentionally not stored in this repository.
+
+## Trusted macOS distribution
+
+macOS will warn that an app “cannot be checked for malicious software” when it is distributed with an ad-hoc signature. A public release must instead be signed with an Apple [**Developer ID Application** certificate](https://developer.apple.com/help/account/certificates/create-developer-id-certificates), submitted to [Apple's notary service](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution), and stapled with the returned ticket. This requires a paid Apple Developer Program membership.
+
+Create a Developer ID Application certificate in the Apple Developer portal from the Mac that will manage the certificate. Export the certificate and private key from Keychain Access as a password-protected `.p12`. Then create an App Store Connect API key with access to notarization and download its one-time `.p8` file.
+
+Add these repository secrets in **GitHub → Oak-Digital/eavesdrop → Settings → Secrets and variables → Actions**:
+
+| Secret | Value |
+| --- | --- |
+| `APPLE_CERTIFICATE` | Base64-encoded contents of the exported `.p12` |
+| `APPLE_CERTIFICATE_PASSWORD` | Password chosen when exporting the `.p12` |
+| `APPLE_SIGNING_IDENTITY` | Full identity, such as `Developer ID Application: Oak Digital ApS (TEAMID)` |
+| `APPLE_API_ISSUER` | Issuer ID shown for the App Store Connect API key |
+| `APPLE_API_KEY` | API key ID, such as `ABC123DEFG` |
+| `APPLE_API_KEY_CONTENT` | Complete contents of `AuthKey_ABC123DEFG.p8` |
+
+On macOS, copy the `.p12` value without writing another unencrypted copy:
+
+```sh
+openssl base64 -A -in DeveloperIDApplication.p12 | pbcopy
+```
+
+Copy the API private key value with:
+
+```sh
+pbcopy < AuthKey_ABC123DEFG.p8
+```
+
+When all six secrets are present, the release job imports the certificate into an ephemeral keychain, signs the universal app with the hardened runtime, notarizes the app, staples Apple's ticket, verifies it with Gatekeeper, and repeats notarization and verification for the final DMG. Until they are configured, the workflow publishes an ad-hoc signed internal-pilot build and emits a warning; users must then explicitly allow that build through Gatekeeper.
 
 ## Publishing updates
 
 Eavesdrop checks the latest public GitHub Release shortly after launch and can download, verify, install, and restart from Settings. Update archives are authenticated with Tauri's updater signature in addition to the platform installer signature.
 
-The release workflow builds a universal macOS app and Windows x64 MSI, creates `latest.json`, and publishes the release only after both builds succeed. The macOS archive is re-signed with Eavesdrop's stable designated requirement before the updater signature is created, which preserves the app identity and privacy permissions between pilot builds. To publish:
+The release workflow builds a universal macOS app and a Windows x64 MSI, creates `latest.json`, and publishes the release only after both builds succeed. The macOS build is signed and notarized when the Apple distribution secrets are configured; otherwise it uses the temporary ad-hoc pilot signature. To publish:
 
 ```sh
 npm run version:set -- 0.2.0
@@ -64,9 +95,7 @@ git tag v0.2.0
 git push origin main v0.2.0
 ```
 
-The `TAURI_SIGNING_PRIVATE_KEY` GitHub Actions secret is required and has already been configured for this repository. Back up the matching private key securely; it is never committed. Anyone installing version 0.1.9 or later can receive subsequent releases through the app.
-
-The workflow currently uses Tauri's documented ad-hoc macOS identity for internal distribution. Before external distribution, configure a Developer ID Application certificate and notarization secrets, plus a Windows code-signing certificate, so the operating systems can verify the publisher as well as the updater payload.
+The `TAURI_SIGNING_PRIVATE_KEY` GitHub Actions secret is also required and has already been configured for this repository. Back up the matching private key securely; it is never committed. Anyone installing version 0.1.9 or later can receive subsequent releases through the app. The first Developer ID-signed update may ask existing pilot users to grant microphone and screen-recording permissions again because the application's macOS signing identity is changing from the old ad-hoc pilot identity.
 
 ## Storage and privacy
 

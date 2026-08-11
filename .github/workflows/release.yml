@@ -37,10 +37,69 @@ jobs:
     runs-on: macos-latest
     env:
       APP_VERSION: ${{ needs.validate.outputs.version }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
     steps:
       - uses: actions/checkout@v7
+      - name: Detect Apple distribution credentials
+        id: apple_signing
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+        run: |
+          missing=()
+          for variable in \
+            APPLE_CERTIFICATE \
+            APPLE_CERTIFICATE_PASSWORD \
+            APPLE_SIGNING_IDENTITY \
+            APPLE_API_ISSUER \
+            APPLE_API_KEY \
+            APPLE_API_KEY_CONTENT
+          do
+            if [ -z "${!variable:-}" ]; then
+              missing+=("$variable")
+            fi
+          done
+
+          if [ "${#missing[@]}" -eq 0 ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Publishing an ad-hoc signed macOS build because Apple distribution secrets are missing: ${missing[*]}"
+          fi
+      - name: Import Developer ID certificate
+        if: steps.apple_signing.outputs.enabled == 'true'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          certificate_path="$RUNNER_TEMP/developer-id-application.p12"
+          keychain_path="$RUNNER_TEMP/eavesdrop-signing.keychain-db"
+          keychain_password="$(openssl rand -base64 32)"
+
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "$keychain_path"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$keychain_password" \
+            "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+          security find-identity -v -p codesigning "$keychain_path"
       - uses: actions/setup-node@v6
         with:
           node-version: lts/*
@@ -52,8 +111,67 @@ jobs:
         with:
           workspaces: ./src-tauri -> target
       - run: npm ci
-      - run: npm run tauri build -- --target universal-apple-darwin --bundles app
-      - name: Apply stable macOS identity and package
+      - name: Build Developer ID-signed macOS app
+        if: steps.apple_signing.outputs.enabled == 'true'
+        run: npm run tauri build -- --target universal-apple-darwin --bundles app
+      - name: Build ad-hoc signed macOS app
+        if: steps.apple_signing.outputs.enabled != 'true'
+        run: npm run tauri build -- --target universal-apple-darwin --bundles app --config '{"bundle":{"macOS":{"signingIdentity":"-"}}}'
+      - name: Notarize and staple macOS application
+        if: steps.apple_signing.outputs.enabled == 'true'
+        shell: bash
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+        run: |
+          app_path="src-tauri/target/universal-apple-darwin/release/bundle/macos/Eavesdrop.app"
+          submission="$RUNNER_TEMP/Eavesdrop-notarization.zip"
+          api_key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+
+          printf '%s' "$APPLE_API_KEY_CONTENT" > "$api_key_path"
+          chmod 600 "$api_key_path"
+
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          ditto -c -k --sequesterRsrc --keepParent "$app_path" "$submission"
+          xcrun notarytool submit "$submission" \
+            --key "$api_key_path" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait
+          xcrun stapler staple "$app_path"
+          xcrun stapler validate "$app_path"
+          spctl --assess --type execute --verbose=4 "$app_path"
+      - name: Package signed macOS artifacts
+        if: steps.apple_signing.outputs.enabled == 'true'
+        shell: bash
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+        run: |
+          app_path="src-tauri/target/universal-apple-darwin/release/bundle/macos/Eavesdrop.app"
+          output_dir="release"
+          archive="$output_dir/Eavesdrop_${APP_VERSION}_universal.app.tar.gz"
+          disk_image="$output_dir/Eavesdrop_${APP_VERSION}_universal.dmg"
+          api_key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+          mkdir -p "$output_dir"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          tar -czf "$archive" -C "$(dirname "$app_path")" "$(basename "$app_path")"
+          npm run tauri signer sign -- --password "" "$archive"
+          ditto -c -k --sequesterRsrc --keepParent "$app_path" "$output_dir/Eavesdrop_${APP_VERSION}_universal.zip"
+          hdiutil create -volname Eavesdrop -srcfolder "$app_path" -ov -format UDZO "$disk_image"
+          codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$disk_image"
+          xcrun notarytool submit "$disk_image" \
+            --key "$api_key_path" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait
+          xcrun stapler staple "$disk_image"
+          xcrun stapler validate "$disk_image"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$disk_image"
+      - name: Package ad-hoc macOS artifacts
+        if: steps.apple_signing.outputs.enabled != 'true'
         shell: bash
         run: |
           app_path="src-tauri/target/universal-apple-darwin/release/bundle/macos/Eavesdrop.app"
@@ -61,7 +179,6 @@ jobs:
           archive="$output_dir/Eavesdrop_${APP_VERSION}_universal.app.tar.gz"
           mkdir -p "$output_dir"
           ./scripts/sign-macos-local.sh "$app_path"
-          codesign --verify --deep --strict --verbose=2 "$app_path"
           tar -czf "$archive" -C "$(dirname "$app_path")" "$(basename "$app_path")"
           npm run tauri signer sign -- --password "" "$archive"
           ditto -c -k --sequesterRsrc --keepParent "$app_path" "$output_dir/Eavesdrop_${APP_VERSION}_universal.zip"
