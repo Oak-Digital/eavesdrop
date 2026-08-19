@@ -27,6 +27,41 @@ pub struct Highlight {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptSegment {
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Transcript {
+    pub text: String,
+    pub language: Option<String>,
+    pub created_at: String,
+    pub segments: Vec<TranscriptSegment>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WhisperModelInfo {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub size_bytes: u64,
+    pub installed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WhisperModelDownloadProgress {
+    pub model_id: String,
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Recording {
@@ -43,6 +78,7 @@ pub struct Recording {
     pub detected_app: Option<String>,
     pub deleted_at: Option<String>,
     pub highlights: Vec<Highlight>,
+    pub transcript: Option<Transcript>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,6 +144,7 @@ pub struct AppSettings {
     pub meeting_detection_enabled: bool,
     pub launch_at_login: bool,
     pub microphone_id: Option<String>,
+    pub whisper_model_path: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -117,6 +154,7 @@ impl Default for AppSettings {
             meeting_detection_enabled: true,
             launch_at_login: false,
             microphone_id: None,
+            whisper_model_path: None,
         }
     }
 }
@@ -144,6 +182,7 @@ pub struct SettingsPatch {
     pub meeting_detection_enabled: Option<bool>,
     pub launch_at_login: Option<bool>,
     pub microphone_id: Option<Option<String>>,
+    pub whisper_model_path: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -17,7 +17,7 @@ import {
   StopIcon,
   TrashIcon,
 } from "./icons";
-import type { AppSnapshot, CaptureMode, Recording } from "./types";
+import type { AppSnapshot, CaptureMode, Recording, WhisperModelDownloadProgress, WhisperModelInfo } from "./types";
 import { useAppState } from "./useAppState";
 import { useUpdater } from "./useUpdater";
 
@@ -305,6 +305,11 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
           <RecordingDetail
             recording={selected}
             deleted={page === "deleted"}
+            whisperModelPath={app.snapshot.settings.whisperModelPath}
+            onChooseWhisperModel={async () => {
+              const path = await api.selectWhisperModel();
+              if (path) await app.updateSettings({ whisperModelPath: path });
+            }}
             onBack={() => setSelected(null)}
             onChanged={(recording) => {
               setSelected(recording);
@@ -369,9 +374,11 @@ function RecordingList({ items, loading, deleted, selectionMode, selectedIds, on
   );
 }
 
-function RecordingDetail({ recording, deleted, onBack, onChanged, onRemoved }: { recording: Recording; deleted: boolean; onBack: () => void; onChanged: (item: Recording) => void; onRemoved: () => void }) {
+function RecordingDetail({ recording, deleted, whisperModelPath, onChooseWhisperModel, onBack, onChanged, onRemoved }: { recording: Recording; deleted: boolean; whisperModelPath: string | null; onChooseWhisperModel: () => Promise<void>; onBack: () => void; onChanged: (item: Recording) => void; onRemoved: () => void }) {
   const [title, setTitle] = useState(recording.title);
   const [busy, setBusy] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+  const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
   const saveTitle = async () => {
     const trimmed = title.trim();
     if (!trimmed || trimmed === recording.title) return;
@@ -392,6 +399,33 @@ function RecordingDetail({ recording, deleted, onBack, onChanged, onRemoved }: {
       </header>
 
       <EncryptedAudioPlayer recording={recording} />
+
+      <section className="detail-section transcript-section">
+        <div className="section-heading">
+          <div><h2>Transcript</h2>{recording.transcript?.language && <span>{recording.transcript.language}</span>}</div>
+          {!deleted && (whisperModelPath ? (
+            <button className="button secondary compact-button" disabled={transcribing || recording.sizeBytes === 0} onClick={async () => {
+              setTranscribing(true);
+              setTranscriptionError(null);
+              try {
+                onChanged(await api.transcribeRecording(recording.id));
+              } catch (cause) {
+                setTranscriptionError(cause instanceof Error ? cause.message : String(cause));
+              } finally {
+                setTranscribing(false);
+              }
+            }}>{transcribing ? "Transcribing…" : recording.transcript ? "Transcribe again" : "Transcribe"}</button>
+          ) : <button className="button secondary compact-button" onClick={onChooseWhisperModel}>Choose Whisper model</button>)}
+        </div>
+        {transcriptionError && <p className="player-error" role="alert">{transcriptionError}</p>}
+        {recording.transcript ? (
+          <div className="transcript-body">
+            {recording.transcript.segments.map((segment, index) => (
+              <p key={`${segment.startMs}-${index}`}><time>{formatDuration(segment.startMs)}</time><span>{segment.text}</span></p>
+            ))}
+          </div>
+        ) : <p className="section-empty">{whisperModelPath ? "Create a private, on-device transcript with Whisper." : "Choose a local open-source Whisper model to enable transcription."}</p>}
+      </section>
 
       <section className="detail-section">
         <h2>Highlights</h2>
@@ -471,6 +505,10 @@ function EncryptedAudioPlayer({ recording }: { recording: Recording }) {
 
 function SettingsPage({ app, updater }: { app: AppController; updater: AppUpdater }) {
   const snapshot = app.snapshot!;
+  const [whisperModels, setWhisperModels] = useState<WhisperModelInfo[]>([]);
+  const [selectedWhisperModel, setSelectedWhisperModel] = useState("base");
+  const [modelProgress, setModelProgress] = useState<WhisperModelDownloadProgress | null>(null);
+  const [installingModel, setInstallingModel] = useState(false);
   const recordingActive = ["starting", "recording", "paused", "finalizing"].includes(snapshot.session.phase);
   const update = updater.state;
   const updateDescription = update.phase === "available"
@@ -482,6 +520,19 @@ function SettingsPage({ app, updater }: { app: AppController; updater: AppUpdate
         : update.phase === "error"
           ? update.error ?? "The update check failed."
           : "Eavesdrop checks for signed updates when it starts.";
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: () => void = () => undefined;
+    void api.listWhisperModels().then((models) => { if (!disposed) setWhisperModels(models); });
+    void api.onWhisperModelDownloadProgress((progress) => {
+      if (!disposed) setModelProgress(progress);
+    }).then((cleanup) => { if (disposed) cleanup(); else unlisten = cleanup; });
+    return () => { disposed = true; unlisten(); };
+  }, []);
+  const selectedModel = whisperModels.find((model) => model.id === selectedWhisperModel);
+  const modelPercentage = modelProgress?.totalBytes
+    ? Math.min(100, Math.round(modelProgress.downloadedBytes / modelProgress.totalBytes * 100))
+    : 0;
   return (
     <div className="settings-page">
       <header className="content-header"><div><h1>Settings</h1><p>Recording sources and app behavior.</p></div></header>
@@ -489,6 +540,33 @@ function SettingsPage({ app, updater }: { app: AppController; updater: AppUpdate
         <h2>Recording</h2>
         <label className="field-label">Microphone<select value={snapshot.settings.microphoneId ?? ""} onChange={(event) => app.updateSettings({ microphoneId: event.target.value || null })}><option value="">System default</option>{snapshot.devices.map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}</select></label>
         <SettingToggle label="Meeting detection" description="Prompt for Zoom, Teams, and Google Meet calls." checked={snapshot.settings.meetingDetectionEnabled} onChange={(meetingDetectionEnabled) => app.updateSettings({ meetingDetectionEnabled })} />
+      </section>
+      <section className="settings-section">
+        <h2>Local transcription</h2>
+        <div className="model-setting">
+          <div><strong>Open-source Whisper</strong><p>{snapshot.settings.whisperModelPath ? `Using ${modelFileName(snapshot.settings.whisperModelPath)}` : "Install a model once, then transcribe without sending audio anywhere."}</p></div>
+          <div className="model-install-controls">
+            <select value={selectedWhisperModel} onChange={(event) => setSelectedWhisperModel(event.target.value)} aria-label="Whisper model">
+              {whisperModels.map((model) => <option key={model.id} value={model.id}>{model.name} · {formatSize(model.sizeBytes)}{model.installed ? " · Installed" : ""}</option>)}
+            </select>
+            <button className="button primary" disabled={!selectedModel || installingModel} onClick={async () => {
+              setInstallingModel(true);
+              setModelProgress(null);
+              try {
+                await app.installWhisperModel(selectedWhisperModel);
+                setWhisperModels(await api.listWhisperModels());
+              } finally {
+                setInstallingModel(false);
+              }
+            }}>{installingModel ? `${modelPercentage}%` : selectedModel?.installed ? "Use model" : "Install"}</button>
+            <button className="button secondary" disabled={installingModel} onClick={async () => {
+              const path = await api.selectWhisperModel();
+              if (path) await app.updateSettings({ whisperModelPath: path });
+            }}>Choose existing…</button>
+          </div>
+          {selectedModel && <p className="model-description">{selectedModel.description}</p>}
+          {installingModel && <progress className="update-progress" max={100} value={modelPercentage} aria-label="Whisper model download progress" />}
+        </div>
       </section>
       <section className="settings-section">
         <h2>General</h2>
@@ -521,6 +599,10 @@ function SettingsPage({ app, updater }: { app: AppController; updater: AppUpdate
       </section>
     </div>
   );
+}
+
+function modelFileName(path: string) {
+  return path.split(/[\\/]/).pop() || path;
 }
 
 function UpdateBanner({ app, updater }: { app: AppController; updater: AppUpdater }) {

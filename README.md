@@ -4,7 +4,7 @@ Eavesdrop is a tray-first meeting recorder for macOS 13+ and Windows 10/11. It r
 
 ## Run locally
 
-Prerequisites: Node.js 20+, Rust 1.85+, the Tauri 2 platform prerequisites, and full Xcode on macOS or Visual Studio Build Tools with the Windows SDK on Windows.
+Prerequisites: Node.js 20+, Rust 1.88+, CMake, the Tauri 2 platform prerequisites, and full Xcode on macOS or Visual Studio Build Tools with the Windows SDK on Windows.
 
 ```sh
 npm install
@@ -12,6 +12,16 @@ npm run tauri dev
 ```
 
 The first recording asks for microphone permission. Online recording on macOS also requires Screen Recording permission. The app remains available from the menu bar or notification area after its library window is closed.
+
+## Local transcription
+
+Eavesdrop embeds the open-source [`whisper.cpp`](https://github.com/ggml-org/whisper.cpp) engine. Transcription happens on-device: decrypted audio is decoded and processed in memory and is never uploaded or written to a plaintext working file.
+
+1. Open **Settings → Local transcription**, choose Tiny, Base, or Small, and select **Install**. Base is the recommended starting point.
+2. Eavesdrop downloads the model from the [official whisper.cpp model repository](https://huggingface.co/ggerganov/whisper.cpp/tree/main), verifies its published fingerprint, and selects it automatically.
+3. Open a finished recording and select **Transcribe**. Eavesdrop saves the timestamped transcript in its local library.
+
+Larger models are generally more accurate but need more memory and take longer to run. An existing whisper.cpp-compatible `.bin` model can still be selected manually.
 
 ## Verification
 
@@ -103,6 +113,7 @@ The `TAURI_SIGNING_PRIVATE_KEY` GitHub Actions secret is also required and has a
 - Each recording has its own AES-256-GCM key, wrapped by a master key held in macOS Keychain or Windows Credential Manager.
 - Audio assets and recovery fragments use independently authenticated blocks with fresh nonces.
 - Playback and export decrypt in memory; the app does not create durable plaintext working files.
+- Whisper transcription also processes audio in memory and never sends it over the network.
 - Deleted recordings remain recoverable for seven days and are then purged at startup.
 
 ## Source layout

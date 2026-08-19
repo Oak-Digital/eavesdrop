@@ -6,14 +6,13 @@ fn main() {
     if let Ok(output) = std::process::Command::new("xcrun")
         .args(["--show-sdk-path"])
         .output()
+        && output.status.success()
     {
-        if output.status.success() {
-            let sdk = String::from_utf8_lossy(&output.stdout);
-            let runtime_stubs = std::path::Path::new(sdk.trim()).join("usr/lib/swift");
-            if runtime_stubs.exists() {
-                println!("cargo:rustc-link-search=native={}", runtime_stubs.display());
-                println!("cargo:rustc-link-lib=dylib=swift_Concurrency");
-            }
+        let sdk = String::from_utf8_lossy(&output.stdout);
+        let runtime_stubs = std::path::Path::new(sdk.trim()).join("usr/lib/swift");
+        if runtime_stubs.exists() {
+            println!("cargo:rustc-link-search=native={}", runtime_stubs.display());
+            println!("cargo:rustc-link-lib=dylib=swift_Concurrency");
         }
     }
 

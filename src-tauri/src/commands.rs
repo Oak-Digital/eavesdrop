@@ -10,7 +10,7 @@ use crate::{
     error::{AppError, AppResult},
     models::{
         AppSnapshot, OnboardingSettings, Recording, RecordingSession, SettingsPatch,
-        StartRecordingInput,
+        StartRecordingInput, WhisperModelInfo,
     },
     state::AppState,
 };
@@ -128,6 +128,28 @@ pub fn export_recording(state: State<'_, AppState>, id: String, path: String) ->
 #[tauri::command]
 pub fn get_recording_audio(state: State<'_, AppState>, id: String) -> AppResult<Vec<u8>> {
     state.decrypt_recording(&id)
+}
+
+#[tauri::command]
+pub async fn transcribe_recording(app: AppHandle, id: String) -> AppResult<Recording> {
+    tauri::async_runtime::spawn_blocking(move || app.state::<AppState>().transcribe_recording(&id))
+        .await
+        .map_err(|error| AppError::Other(format!("transcription task failed: {error}")))?
+}
+
+#[tauri::command]
+pub fn list_whisper_models(state: State<'_, AppState>) -> Vec<WhisperModelInfo> {
+    state.whisper_models()
+}
+
+#[tauri::command]
+pub async fn install_whisper_model(app: AppHandle, model_id: String) -> AppResult<AppSnapshot> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<AppState>()
+            .install_whisper_model(&app, &model_id)
+    })
+    .await
+    .map_err(|error| AppError::Other(format!("model installation task failed: {error}")))?
 }
 
 #[tauri::command]

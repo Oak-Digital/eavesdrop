@@ -20,6 +20,33 @@ export interface Highlight {
   createdAt: string;
 }
 
+export interface TranscriptSegment {
+  startMs: number;
+  endMs: number;
+  text: string;
+}
+
+export interface Transcript {
+  text: string;
+  language: string | null;
+  createdAt: string;
+  segments: TranscriptSegment[];
+}
+
+export interface WhisperModelInfo {
+  id: string;
+  name: string;
+  description: string;
+  sizeBytes: number;
+  installed: boolean;
+}
+
+export interface WhisperModelDownloadProgress {
+  modelId: string;
+  downloadedBytes: number;
+  totalBytes: number;
+}
+
 export interface Recording {
   id: string;
   title: string;
@@ -34,6 +61,7 @@ export interface Recording {
   detectedApp: string | null;
   deletedAt: string | null;
   highlights: Highlight[];
+  transcript: Transcript | null;
 }
 
 export interface RecordingSession {
@@ -59,6 +87,7 @@ export interface AppSettings {
   meetingDetectionEnabled: boolean;
   launchAtLogin: boolean;
   microphoneId: string | null;
+  whisperModelPath: string | null;
 }
 
 export interface AppSnapshot {

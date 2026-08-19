@@ -1,4 +1,8 @@
-use std::{fs, path::Path, sync::Mutex};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 
 use chrono::{Local, Utc};
 use tauri::{AppHandle, Emitter, Manager};
@@ -9,7 +13,7 @@ use crate::{
     error::{AppError, AppResult},
     models::{
         AppSnapshot, CaptureMode, Recording, RecordingPhase, RecordingSession, SettingsPatch,
-        StartRecordingInput,
+        StartRecordingInput, Transcript, WhisperModelInfo,
     },
     platform,
     storage::Repository,
@@ -18,7 +22,9 @@ use crate::{
 pub struct AppState {
     pub repository: Repository,
     pub vault: Vault,
+    models_dir: PathBuf,
     runtime: Mutex<RuntimeState>,
+    model_download_active: Mutex<bool>,
 }
 
 struct RuntimeState {
@@ -46,9 +52,11 @@ impl AppState {
         fs::create_dir_all(&app_data)?;
         let repository = Repository::open(&app_data.join("library.sqlite3"))?;
         let vault = Vault::open(app_data.join("recordings"))?;
+        let models_dir = app_data.join("models");
         let state = Self {
             repository,
             vault,
+            models_dir,
             runtime: Mutex::new(RuntimeState {
                 phase: RecordingPhase::Idle,
                 active: None,
@@ -56,6 +64,7 @@ impl AppState {
                 error: None,
                 update_installing: false,
             }),
+            model_download_active: Mutex::new(false),
         };
         state.recover_unfinished()?;
         for path in state.repository.purge_expired()? {
@@ -134,6 +143,7 @@ impl AppState {
             detected_app: input.detected_app,
             deleted_at: None,
             highlights: Vec::new(),
+            transcript: None,
         };
         self.repository.insert_recording(
             &placeholder,
@@ -264,6 +274,50 @@ impl AppState {
             .ok_or_else(|| AppError::State("recording is not finalized".into()))?;
         let key = self.vault.unwrap_key(&secrets.wrapped_key)?;
         self.vault.open_asset(Path::new(&path), &key)
+    }
+
+    pub fn transcribe_recording(&self, id: &str) -> AppResult<Recording> {
+        let settings = self.repository.settings()?;
+        let model_path = settings.whisper_model_path.ok_or_else(|| {
+            AppError::State("choose a local Whisper model in Settings first".into())
+        })?;
+        let audio = self.decrypt_recording(id)?;
+        let transcript: Transcript =
+            crate::transcription::transcribe(&audio, Path::new(&model_path))?;
+        self.repository.save_transcript(id, &transcript)?;
+        self.repository.recording(id)
+    }
+
+    pub fn whisper_models(&self) -> Vec<WhisperModelInfo> {
+        crate::transcription::available_models(&self.models_dir)
+    }
+
+    pub fn install_whisper_model(&self, app: &AppHandle, model_id: &str) -> AppResult<AppSnapshot> {
+        {
+            let mut active = self
+                .model_download_active
+                .lock()
+                .map_err(|_| AppError::State("model download lock poisoned".into()))?;
+            if *active {
+                return Err(AppError::State(
+                    "another Whisper model download is already running".into(),
+                ));
+            }
+            *active = true;
+        }
+
+        let result =
+            crate::transcription::install_model(app, &self.models_dir, model_id).and_then(|path| {
+                self.repository.update_settings(&SettingsPatch {
+                    whisper_model_path: Some(Some(path.to_string_lossy().into_owned())),
+                    ..Default::default()
+                })?;
+                self.snapshot(false)
+            });
+        if let Ok(mut active) = self.model_download_active.lock() {
+            *active = false;
+        }
+        result
     }
 
     pub fn update_settings(&self, patch: &SettingsPatch) -> AppResult<crate::models::AppSettings> {

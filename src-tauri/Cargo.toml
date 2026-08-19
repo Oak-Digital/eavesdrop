@@ -4,7 +4,7 @@ version = "0.1.13"
 description = "A private cross-platform meeting recorder"
 authors = ["Eavesdrop"]
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [lib]
 name = "eavesdrop_lib"
@@ -27,10 +27,13 @@ fs2 = "0.4"
 keyring = { version = "3.6", features = ["apple-native", "windows-native"] }
 mp4 = "0.14"
 rand = "0.9"
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "native-tls"] }
 rusqlite = { version = "0.38", features = ["bundled", "chrono"] }
 rusty_aac = "0.5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha1 = "0.10"
+symphonia = { version = "0.5", default-features = false, features = ["aac"] }
 tauri = { version = "2.11", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-autostart = "2.5"
 tauri-plugin-dialog = "2.6"
@@ -40,6 +43,7 @@ tauri-plugin-process = "2.3.1"
 tauri-plugin-updater = "2.10.1"
 thiserror = "2"
 uuid = { version = "1.21", features = ["v4", "serde"] }
+whisper-rs = "0.16"
 webrtc-audio-processing = { version = "2.1", features = ["bundled"], optional = true }
 webrtc-audio-processing-config = { version = "2.1", optional = true }
 

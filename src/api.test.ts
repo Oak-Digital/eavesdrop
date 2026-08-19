@@ -3,7 +3,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   deleteRecordings,
+  getSnapshot,
+  installWhisperModel,
   listRecordings,
+  listWhisperModels,
   resetBrowserMock,
   restoreRecordings,
   startRecording,
@@ -26,5 +29,18 @@ describe("bulk recording actions", () => {
     await restoreRecordings([first.id, second.id]);
     expect(await listRecordings(false)).toHaveLength(2);
     expect(await listRecordings(true)).toHaveLength(0);
+  });
+});
+
+describe("Whisper model installation", () => {
+  beforeEach(resetBrowserMock);
+
+  it("installs and selects a curated model", async () => {
+    expect((await listWhisperModels()).find((model) => model.id === "base")?.installed).toBe(false);
+
+    await installWhisperModel("base");
+
+    expect((await listWhisperModels()).find((model) => model.id === "base")?.installed).toBe(true);
+    expect((await getSnapshot()).settings.whisperModelPath).toBe("/models/ggml-base.bin");
   });
 });

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
   AppSettings,
   AppSnapshot,
@@ -9,6 +9,8 @@ import type {
   Recording,
   RecordingSession,
   StartRecordingInput,
+  WhisperModelDownloadProgress,
+  WhisperModelInfo,
 } from "./types";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
@@ -34,12 +36,14 @@ const mockSnapshot: AppSnapshot = {
     meetingDetectionEnabled: true,
     launchAtLogin: false,
     microphoneId: null,
+    whisperModelPath: null,
   },
   devices: [{ id: "default", name: "Default microphone", isDefault: true }],
 };
 
 let browserSnapshot = structuredClone(mockSnapshot);
 let browserRecordings: Recording[] = [];
+let browserInstalledWhisperModels = new Set<string>();
 
 async function command<T>(name: string, args?: Record<string, unknown>): Promise<T> {
   if (!isTauri()) throw new Error(`Command ${name} is only available in the desktop app`);
@@ -114,6 +118,7 @@ export async function stopRecording(): Promise<Recording> {
     detectedApp: null,
     deletedAt: null,
     highlights: [],
+    transcript: null,
   };
   browserRecordings.unshift(recording);
   browserSnapshot.session = structuredClone(idleSession);
@@ -187,6 +192,49 @@ export async function getRecordingAudio(id: string): Promise<Uint8Array | null> 
   return Uint8Array.from(bytes);
 }
 
+export async function selectWhisperModel(): Promise<string | null> {
+  if (!isTauri()) return "/models/ggml-base.bin";
+  const path = await open({
+    multiple: false,
+    directory: false,
+    filters: [{ name: "Whisper model", extensions: ["bin"] }],
+  });
+  return typeof path === "string" ? path : null;
+}
+
+export async function transcribeRecording(id: string): Promise<Recording> {
+  if (isTauri()) return command<Recording>("transcribe_recording", { id });
+  const item = browserRecordings.find((recording) => recording.id === id)!;
+  item.transcript = {
+    text: "Example local transcript.",
+    language: "English",
+    createdAt: new Date().toISOString(),
+    segments: [{ startMs: 0, endMs: 2000, text: "Example local transcript." }],
+  };
+  return structuredClone(item);
+}
+
+export async function listWhisperModels(): Promise<WhisperModelInfo[]> {
+  if (isTauri()) return command<WhisperModelInfo[]>("list_whisper_models");
+  return [
+    { id: "tiny", name: "Tiny", description: "Fastest, with lower accuracy", sizeBytes: 77_691_713 },
+    { id: "base", name: "Base", description: "Recommended balance of speed and accuracy", sizeBytes: 147_951_465 },
+    { id: "small", name: "Small", description: "More accurate, but slower", sizeBytes: 487_601_967 },
+  ].map((model) => ({ ...model, installed: browserInstalledWhisperModels.has(model.id) }));
+}
+
+export async function installWhisperModel(modelId: string): Promise<AppSnapshot> {
+  if (isTauri()) return command<AppSnapshot>("install_whisper_model", { modelId });
+  browserInstalledWhisperModels.add(modelId);
+  browserSnapshot.settings.whisperModelPath = `/models/ggml-${modelId}.bin`;
+  return structuredClone(browserSnapshot);
+}
+
+export async function onWhisperModelDownloadProgress(handler: (progress: WhisperModelDownloadProgress) => void): Promise<UnlistenFn> {
+  if (!isTauri()) return () => undefined;
+  return listen<WhisperModelDownloadProgress>("whisper-model-download-progress", (event) => handler(event.payload));
+}
+
 export async function dismissMeeting(id: string): Promise<void> {
   if (isTauri()) await command<void>("dismiss_meeting", { id });
 }
@@ -245,4 +293,5 @@ export async function onMeetingEnded(handler: () => void): Promise<UnlistenFn> {
 export function resetBrowserMock() {
   browserSnapshot = structuredClone(mockSnapshot);
   browserRecordings = [];
+  browserInstalledWhisperModels = new Set();
 }

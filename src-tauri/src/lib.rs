@@ -9,6 +9,7 @@ mod models;
 mod platform;
 mod state;
 mod storage;
+mod transcription;
 
 use tauri::{
     Emitter, Manager,
@@ -47,6 +48,9 @@ pub fn run() {
             commands::restore_recordings,
             commands::export_recording,
             commands::get_recording_audio,
+            commands::transcribe_recording,
+            commands::list_whisper_models,
+            commands::install_whisper_model,
             commands::open_library,
             commands::hide_quick_panel,
             commands::begin_update_install,
@@ -87,20 +91,19 @@ pub fn run() {
                         button_state: MouseButtonState::Up,
                         ..
                     } = event
+                        && let Some(window) = tray.app_handle().get_webview_window("quick_panel")
                     {
-                        if let Some(window) = tray.app_handle().get_webview_window("quick_panel") {
-                            if window.is_visible().unwrap_or(false) {
-                                let _ = window.hide();
-                            } else {
-                                let scale = window.scale_factor().unwrap_or(1.0);
-                                let x = position.x - 360.0 * scale;
-                                let y = position.y + 8.0 * scale;
-                                let _ = window.set_position(tauri::Position::Physical(
-                                    tauri::PhysicalPosition::new(x as i32, y as i32),
-                                ));
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                            }
+                        if window.is_visible().unwrap_or(false) {
+                            let _ = window.hide();
+                        } else {
+                            let scale = window.scale_factor().unwrap_or(1.0);
+                            let x = position.x - 360.0 * scale;
+                            let y = position.y + 8.0 * scale;
+                            let _ = window.set_position(tauri::Position::Physical(
+                                tauri::PhysicalPosition::new(x as i32, y as i32),
+                            ));
+                            let _ = window.show();
+                            let _ = window.set_focus();
                         }
                     }
                 })
@@ -108,11 +111,11 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if window.label() == "main" {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    api.prevent_close();
-                    let _ = window.hide();
-                }
+            if window.label() == "main"
+                && let tauri::WindowEvent::CloseRequested { api, .. } = event
+            {
+                api.prevent_close();
+                let _ = window.hide();
             }
         })
         .run(tauri::generate_context!())
