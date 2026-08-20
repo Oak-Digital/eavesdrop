@@ -18,5 +18,15 @@ export function formatDate(value: string): string {
 export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 ** 2) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  // Summary models run to several gigabytes, where "4466.1 MB" stops being a
+  // size a reader can weigh against their free disk space.
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+}
+
+// Converts a 0..1 transcription progress ratio into a whole percentage,
+// tolerating out-of-range values from the backend.
+export function transcriptionPercentage(progress: number): number {
+  if (Number.isNaN(progress)) return 0;
+  return Math.round(Math.min(Math.max(progress, 0), 1) * 100);
 }

@@ -13,7 +13,8 @@ use crate::{
     error::{AppError, AppResult},
     models::{
         AppSnapshot, CaptureMode, Recording, RecordingPhase, RecordingSession, SettingsPatch,
-        StartRecordingInput, Transcript, WhisperModelInfo,
+        StartRecordingInput, SummarizationProgress, SummarizationStage, Summary,
+        SummaryModelDownloadProgress, SummaryModelInfo, Transcript, WhisperModelInfo,
     },
     platform,
     storage::Repository,
@@ -25,6 +26,8 @@ pub struct AppState {
     models_dir: PathBuf,
     runtime: Mutex<RuntimeState>,
     model_download_active: Mutex<bool>,
+    /// A loaded summary model can hold gigabytes, so only one run at a time.
+    summarization_active: Mutex<bool>,
 }
 
 struct RuntimeState {
@@ -65,6 +68,7 @@ impl AppState {
                 update_installing: false,
             }),
             model_download_active: Mutex::new(false),
+            summarization_active: Mutex::new(false),
         };
         state.recover_unfinished()?;
         for path in state.repository.purge_expired()? {
@@ -144,6 +148,7 @@ impl AppState {
             deleted_at: None,
             highlights: Vec::new(),
             transcript: None,
+            summary: None,
         };
         self.repository.insert_recording(
             &placeholder,
@@ -276,16 +281,104 @@ impl AppState {
         self.vault.open_asset(Path::new(&path), &key)
     }
 
-    pub fn transcribe_recording(&self, id: &str) -> AppResult<Recording> {
+    pub fn transcribe_recording(&self, app: &AppHandle, id: &str) -> AppResult<Recording> {
         let settings = self.repository.settings()?;
         let model_path = settings.whisper_model_path.ok_or_else(|| {
             AppError::State("choose a local Whisper model in Settings first".into())
         })?;
         let audio = self.decrypt_recording(id)?;
         let transcript: Transcript =
-            crate::transcription::transcribe(&audio, Path::new(&model_path))?;
+            crate::transcription::transcribe(app, id, &audio, Path::new(&model_path))?;
         self.repository.save_transcript(id, &transcript)?;
         self.repository.recording(id)
+    }
+
+    pub fn summarize_recording(&self, app: &AppHandle, id: &str) -> AppResult<Recording> {
+        let settings = self.repository.settings()?;
+        let model_path = settings.summary_model_path.ok_or_else(|| {
+            AppError::State("install a local summary model in Settings first".into())
+        })?;
+        let recording = self.repository.recording(id)?;
+        let transcript = recording.transcript.ok_or_else(|| {
+            AppError::State("transcribe this recording before summarizing it".into())
+        })?;
+        {
+            let mut active = self
+                .summarization_active
+                .lock()
+                .map_err(|_| AppError::State("summary lock poisoned".into()))?;
+            if *active {
+                return Err(AppError::State(
+                    "another summary is already running".into(),
+                ));
+            }
+            *active = true;
+        }
+        let mut on_progress = |stage: SummarizationStage, progress: f32| {
+            let _ = app.emit(
+                "summarization-progress",
+                SummarizationProgress {
+                    recording_id: id.to_string(),
+                    stage,
+                    progress: progress.clamp(0.0, 1.0),
+                },
+            );
+        };
+        let result: AppResult<Summary> = crate::summarization::summarize(
+            &transcript,
+            Path::new(&model_path),
+            &mut on_progress,
+        );
+        if let Ok(mut active) = self.summarization_active.lock() {
+            *active = false;
+        }
+        self.repository.save_summary(id, &result?)?;
+        self.repository.recording(id)
+    }
+
+    pub fn summary_models(&self) -> Vec<SummaryModelInfo> {
+        crate::summarization::available_models(&self.models_dir)
+    }
+
+    pub fn install_summary_model(&self, app: &AppHandle, model_id: &str) -> AppResult<AppSnapshot> {
+        {
+            let mut active = self
+                .model_download_active
+                .lock()
+                .map_err(|_| AppError::State("model download lock poisoned".into()))?;
+            if *active {
+                return Err(AppError::State(
+                    "another model download is already running".into(),
+                ));
+            }
+            *active = true;
+        }
+
+        let result = crate::summarization::install_model(
+            &self.models_dir,
+            model_id,
+            |downloaded, total| {
+                let _ = app.emit(
+                    "summary-model-download-progress",
+                    SummaryModelDownloadProgress {
+                        model_id: model_id.to_string(),
+                        downloaded_bytes: downloaded,
+                        total_bytes: total,
+                    },
+                );
+            },
+        )
+        .and_then(|path| {
+                self.repository.update_settings(&SettingsPatch {
+                    summary_model_path: Some(Some(path.to_string_lossy().into_owned())),
+                    ..Default::default()
+                })?;
+            self.snapshot(false)
+        });
+        if let Ok(mut active) = self.model_download_active.lock() {
+            *active = false;
+        }
+        result
     }
 
     pub fn whisper_models(&self) -> Vec<WhisperModelInfo> {

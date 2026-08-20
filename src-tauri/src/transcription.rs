@@ -1,12 +1,9 @@
 use std::{
-    fs::{self, File},
-    io::{Cursor, Read, Write},
+    io::Cursor,
     path::{Path, PathBuf},
-    time::Duration,
 };
 
 use chrono::Utc;
-use sha1::{Digest, Sha1};
 use symphonia::core::{
     audio::{Channels, SampleBuffer},
     codecs::{CODEC_TYPE_AAC, CodecParameters, DecoderOptions},
@@ -19,8 +16,12 @@ use whisper_rs::{
 };
 
 use crate::{
+    download::{self, Checksum},
     error::{AppError, AppResult},
-    models::{Transcript, TranscriptSegment, WhisperModelDownloadProgress, WhisperModelInfo},
+    models::{
+        Transcript, TranscriptSegment, TranscriptionProgress, TranscriptionStage,
+        WhisperModelDownloadProgress, WhisperModelInfo,
+    },
 };
 
 const WHISPER_SAMPLE_RATE: u32 = 16_000;
@@ -76,83 +77,30 @@ pub fn install_model(app: &AppHandle, models_dir: &Path, model_id: &str) -> AppR
         .iter()
         .find(|model| model.id == model_id)
         .ok_or_else(|| AppError::State("unknown Whisper model".into()))?;
-    fs::create_dir_all(models_dir)?;
-    let final_path = model_path(models_dir, model);
-    if final_path.is_file() && file_sha1(&final_path)? == model.sha1 {
-        emit_download_progress(app, model, model.size_bytes, model.size_bytes);
-        return Ok(final_path);
-    }
-    if fs2::available_space(models_dir).unwrap_or(u64::MAX) < model.size_bytes + 100 * 1024 * 1024 {
-        return Err(AppError::Storage(
-            "not enough free space to install this Whisper model".into(),
-        ));
-    }
-
-    let pending_path = final_path.with_extension("bin.part");
-    let result = download_model(app, model, &pending_path).and_then(|()| {
-        let actual_sha1 = file_sha1(&pending_path)?;
-        if actual_sha1 != model.sha1 {
-            return Err(AppError::Other(
-                "downloaded Whisper model failed its integrity check".into(),
-            ));
-        }
-        if final_path.exists() {
-            fs::remove_file(&final_path)?;
-        }
-        fs::rename(&pending_path, &final_path)?;
-        Ok(final_path.clone())
-    });
-    if result.is_err() {
-        let _ = fs::remove_file(pending_path);
-    }
-    result
+    download::install(
+        &format!("{MODEL_BASE_URL}/ggml-{}.bin", model.id),
+        &model_path(models_dir, model),
+        model.size_bytes,
+        Checksum::Sha1(model.sha1),
+        "Whisper model",
+        |downloaded, total| emit_download_progress(app, model, downloaded, total),
+    )
 }
 
-fn download_model(app: &AppHandle, model: &ModelSpec, path: &Path) -> AppResult<()> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(30 * 60))
-        .user_agent("Eavesdrop Whisper model installer")
-        .build()
-        .map_err(|error| AppError::Other(format!("could not start model download: {error}")))?;
-    let url = format!("{MODEL_BASE_URL}/ggml-{}.bin", model.id);
-    let mut response = client
-        .get(url)
-        .send()
-        .and_then(reqwest::blocking::Response::error_for_status)
-        .map_err(|error| AppError::Other(format!("could not download Whisper model: {error}")))?;
-    let expected_bytes = response.content_length();
-    let total_bytes = expected_bytes.unwrap_or(model.size_bytes);
-    let mut file = File::create(path)?;
-    let mut downloaded_bytes = 0u64;
-    let mut last_reported_bytes = 0u64;
-    let mut buffer = [0u8; 64 * 1024];
-    emit_download_progress(app, model, 0, total_bytes);
-    loop {
-        let count = response
-            .read(&mut buffer)
-            .map_err(|error| AppError::Other(format!("Whisper model download stopped: {error}")))?;
-        if count == 0 {
-            break;
-        }
-        file.write_all(&buffer[..count])?;
-        downloaded_bytes += count as u64;
-        if downloaded_bytes.saturating_sub(last_reported_bytes) >= 1024 * 1024
-            || expected_bytes == Some(downloaded_bytes)
-        {
-            emit_download_progress(app, model, downloaded_bytes, total_bytes);
-            last_reported_bytes = downloaded_bytes;
-        }
-    }
-    file.sync_all()?;
-    if let Some(expected_bytes) = expected_bytes
-        && downloaded_bytes != expected_bytes
-    {
-        return Err(AppError::Other(format!(
-            "Whisper model download was incomplete ({downloaded_bytes} of {expected_bytes} bytes)"
-        )));
-    }
-    emit_download_progress(app, model, downloaded_bytes, downloaded_bytes);
-    Ok(())
+fn emit_transcription_progress(
+    app: &AppHandle,
+    recording_id: &str,
+    stage: TranscriptionStage,
+    progress: f32,
+) {
+    let _ = app.emit(
+        "transcription-progress",
+        TranscriptionProgress {
+            recording_id: recording_id.to_string(),
+            stage,
+            progress: progress.clamp(0.0, 1.0),
+        },
+    );
 }
 
 fn emit_download_progress(app: &AppHandle, model: &ModelSpec, downloaded: u64, total: u64) {
@@ -166,25 +114,16 @@ fn emit_download_progress(app: &AppHandle, model: &ModelSpec, downloaded: u64, t
     );
 }
 
-fn file_sha1(path: &Path) -> AppResult<String> {
-    let mut file = File::open(path)?;
-    let mut hasher = Sha1::new();
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        let count = file.read(&mut buffer)?;
-        if count == 0 {
-            break;
-        }
-        hasher.update(&buffer[..count]);
-    }
-    Ok(format!("{:x}", hasher.finalize()))
-}
-
 fn model_path(models_dir: &Path, model: &ModelSpec) -> PathBuf {
     models_dir.join(format!("ggml-{}.bin", model.id))
 }
 
-pub fn transcribe(m4a: &[u8], model_path: &Path) -> AppResult<Transcript> {
+pub fn transcribe(
+    app: &AppHandle,
+    recording_id: &str,
+    m4a: &[u8],
+    model_path: &Path,
+) -> AppResult<Transcript> {
     if !model_path.is_file() {
         return Err(AppError::State(format!(
             "Whisper model was not found at {}",
@@ -192,6 +131,7 @@ pub fn transcribe(m4a: &[u8], model_path: &Path) -> AppResult<Transcript> {
         )));
     }
 
+    emit_transcription_progress(app, recording_id, TranscriptionStage::Decoding, 0.0);
     let pcm = decode_m4a_to_mono(m4a)?;
     if pcm.is_empty() {
         return Err(AppError::Audio(
@@ -216,9 +156,33 @@ pub fn transcribe(m4a: &[u8], model_path: &Path) -> AppResult<Transcript> {
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
 
+    // Whisper reports 0..=100. Emit only on change: the callback fires far more
+    // often than the bar can meaningfully move, and every emit crosses to the
+    // webview.
+    emit_transcription_progress(app, recording_id, TranscriptionStage::Transcribing, 0.0);
+    let progress_app = app.clone();
+    let progress_id = recording_id.to_string();
+    let mut last_percent = -1i32;
+    params.set_progress_callback_safe(move |percent: i32| {
+        let percent = percent.clamp(0, 100);
+        if percent == last_percent {
+            return;
+        }
+        last_percent = percent;
+        emit_transcription_progress(
+            &progress_app,
+            &progress_id,
+            TranscriptionStage::Transcribing,
+            percent as f32 / 100.0,
+        );
+    });
+
     state
         .full(params, &pcm)
         .map_err(|error| AppError::Other(format!("Whisper transcription failed: {error}")))?;
+    // Whisper's callback is not guaranteed to land on exactly 100, so settle the
+    // bar at full before the caller tears the UI down.
+    emit_transcription_progress(app, recording_id, TranscriptionStage::Transcribing, 1.0);
 
     let mut segments = Vec::new();
     for segment in state.as_iter() {
@@ -383,7 +347,7 @@ mod tests {
     #[test]
     fn model_catalog_detects_downloaded_models() {
         let temp = tempfile::tempdir().unwrap();
-        fs::write(temp.path().join("ggml-base.bin"), b"model").unwrap();
+        std::fs::write(temp.path().join("ggml-base.bin"), b"model").unwrap();
 
         let models = available_models(temp.path());
 
@@ -405,15 +369,7 @@ mod tests {
     }
 
     #[test]
-    fn model_integrity_uses_the_published_sha1_format() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("model.bin");
-        fs::write(&path, b"abc").unwrap();
-
-        assert_eq!(
-            file_sha1(&path).unwrap(),
-            "a9993e364706816aba3e25717850c26c9cd0d89d"
-        );
+    fn model_catalog_publishes_a_sha1_for_every_entry() {
         assert!(MODELS.iter().all(|model| model.sha1.len() == 40));
     }
 }

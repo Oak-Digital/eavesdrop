@@ -90,6 +90,10 @@ export function useAppState() {
       const next = await run(() => api.installWhisperModel(modelId));
       if (next) setSnapshot(next);
     },
+    installSummaryModel: async (modelId: string) => {
+      const next = await run(() => api.installSummaryModel(modelId));
+      if (next) setSnapshot(next);
+    },
     start: async (input: StartRecordingInput) => setSession(await run(() => api.startRecording(input))),
     pause: async () => setSession(await run(api.pauseRecording)),
     resume: async () => setSession(await run(api.resumeRecording)),

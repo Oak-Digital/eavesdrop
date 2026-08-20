@@ -4,12 +4,21 @@ mod crypto;
 mod destinations;
 mod detection;
 mod diagnostics;
+mod download;
 mod error;
 mod models;
 mod platform;
 mod state;
 mod storage;
+mod summarization;
 mod transcription;
+
+/// The pieces `examples/summary_probe.rs` drives directly, so the local summary
+/// pipeline can be exercised without launching the app.
+pub mod probe {
+    pub use crate::models::{SummarizationStage, Summary, Transcript};
+    pub use crate::summarization::summarize;
+}
 
 use tauri::{
     Emitter, Manager,
@@ -51,6 +60,9 @@ pub fn run() {
             commands::transcribe_recording,
             commands::list_whisper_models,
             commands::install_whisper_model,
+            commands::summarize_recording,
+            commands::list_summary_models,
+            commands::install_summary_model,
             commands::open_library,
             commands::hide_quick_panel,
             commands::begin_update_install,
@@ -213,6 +225,31 @@ mod tests {
         let config = include_str!("../tauri.conf.json");
         assert!(config.contains("icons/icon.icns"));
         assert!(config.contains("icons/icon.ico"));
+    }
+
+    #[test]
+    fn transcription_progress_event_name_matches_the_frontend_listener() {
+        // The backend emit and the webview listener are only coupled by this
+        // string, so a rename on either side silently breaks the progress bar.
+        let backend = include_str!("transcription.rs");
+        let frontend = include_str!("../../src/api.ts");
+        assert!(backend.contains("\"transcription-progress\""));
+        assert!(frontend.contains("listen<TranscriptionProgress>(\"transcription-progress\""));
+    }
+
+    #[test]
+    fn summary_event_names_match_the_frontend_listeners() {
+        // Same coupling as the transcription progress event: a rename on either
+        // side silently breaks the sidebar and the model download bar.
+        let backend = include_str!("state.rs");
+        let frontend = include_str!("../../src/api.ts");
+        assert!(backend.contains("\"summarization-progress\""));
+        assert!(backend.contains("\"summary-model-download-progress\""));
+        assert!(frontend.contains("listen<SummarizationProgress>(\"summarization-progress\""));
+        assert!(
+            frontend
+                .contains("listen<SummaryModelDownloadProgress>(\"summary-model-download-progress\"")
+        );
     }
 
     #[test]

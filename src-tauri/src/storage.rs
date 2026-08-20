@@ -6,7 +6,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::{
     error::{AppError, AppResult},
     models::{
-        AppSettings, CaptureMode, Highlight, Recording, SettingsPatch, Transcript,
+        AppSettings, CaptureMode, Highlight, Recording, SettingsPatch, Summary, Transcript,
         TranscriptSegment,
     },
 };
@@ -82,6 +82,20 @@ impl Repository {
               text TEXT NOT NULL,
               PRIMARY KEY(recording_id, segment_index)
             );
+            CREATE TABLE IF NOT EXISTS summaries (
+              recording_id TEXT PRIMARY KEY REFERENCES recordings(id) ON DELETE CASCADE,
+              suggested_title TEXT NOT NULL,
+              overview TEXT NOT NULL,
+              model TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS summary_points (
+              recording_id TEXT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+              kind TEXT NOT NULL CHECK(kind IN ('key_point', 'decision', 'action_item')),
+              position INTEGER NOT NULL,
+              text TEXT NOT NULL,
+              PRIMARY KEY(recording_id, kind, position)
+            );
             CREATE TABLE IF NOT EXISTS detected_meetings (
               id TEXT PRIMARY KEY,
               app TEXT NOT NULL,
@@ -115,6 +129,7 @@ impl Repository {
             "
         )?;
         ensure_column(&connection, "settings", "whisper_model_path", "TEXT")?;
+        ensure_column(&connection, "settings", "summary_model_path", "TEXT")?;
         Ok(())
     }
 
@@ -124,7 +139,7 @@ impl Repository {
             .lock()
             .map_err(|_| AppError::Storage("database lock poisoned".into()))?;
         connection.query_row(
-            "SELECT onboarding_completed, meeting_detection_enabled, launch_at_login, microphone_id, whisper_model_path FROM settings WHERE singleton = 1",
+            "SELECT onboarding_completed, meeting_detection_enabled, launch_at_login, microphone_id, whisper_model_path, summary_model_path FROM settings WHERE singleton = 1",
             [],
             |row| Ok(AppSettings {
                 onboarding_completed: row.get::<_, i64>(0)? != 0,
@@ -132,6 +147,7 @@ impl Repository {
                 launch_at_login: row.get::<_, i64>(2)? != 0,
                 microphone_id: row.get(3)?,
                 whisper_model_path: row.get(4)?,
+                summary_model_path: row.get(5)?,
             }),
         ).map_err(Into::into)
     }
@@ -151,14 +167,18 @@ impl Repository {
                 .whisper_model_path
                 .clone()
                 .unwrap_or(current.whisper_model_path),
+            summary_model_path: patch
+                .summary_model_path
+                .clone()
+                .unwrap_or(current.summary_model_path),
         };
         let connection = self
             .connection
             .lock()
             .map_err(|_| AppError::Storage("database lock poisoned".into()))?;
         connection.execute(
-            "UPDATE settings SET onboarding_completed = ?1, meeting_detection_enabled = ?2, launch_at_login = ?3, microphone_id = ?4, whisper_model_path = ?5 WHERE singleton = 1",
-            params![next.onboarding_completed, next.meeting_detection_enabled, next.launch_at_login, next.microphone_id, next.whisper_model_path],
+            "UPDATE settings SET onboarding_completed = ?1, meeting_detection_enabled = ?2, launch_at_login = ?3, microphone_id = ?4, whisper_model_path = ?5, summary_model_path = ?6 WHERE singleton = 1",
+            params![next.onboarding_completed, next.meeting_detection_enabled, next.launch_at_login, next.microphone_id, next.whisper_model_path, next.summary_model_path],
         )?;
         Ok(next)
     }
@@ -250,6 +270,7 @@ impl Repository {
             .map(|mut recording| {
                 recording.highlights = highlights_for(&connection, &recording.id)?;
                 recording.transcript = transcript_for(&connection, &recording.id)?;
+                recording.summary = summary_for(&connection, &recording.id)?;
                 Ok(recording)
             })
             .collect()
@@ -267,6 +288,7 @@ impl Repository {
         ).optional()?.ok_or(AppError::NotFound)?;
         recording.highlights = highlights_for(&connection, id)?;
         recording.transcript = transcript_for(&connection, id)?;
+        recording.summary = summary_for(&connection, id)?;
         Ok(recording)
     }
 
@@ -290,6 +312,37 @@ impl Repository {
                 "INSERT INTO transcript_segments(recording_id, segment_index, start_ms, end_ms, text) VALUES(?1, ?2, ?3, ?4, ?5)",
                 params![recording_id, index as i64, segment.start_ms, segment.end_ms, segment.text],
             )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn save_summary(&self, recording_id: &str, summary: &Summary) -> AppResult<()> {
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| AppError::Storage("database lock poisoned".into()))?;
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO summaries(recording_id, suggested_title, overview, model, created_at) VALUES(?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(recording_id) DO UPDATE SET suggested_title=excluded.suggested_title, overview=excluded.overview, model=excluded.model, created_at=excluded.created_at",
+            params![recording_id, summary.suggested_title, summary.overview, summary.model, summary.created_at],
+        )?;
+        transaction.execute(
+            "DELETE FROM summary_points WHERE recording_id=?1",
+            [recording_id],
+        )?;
+        for (kind, points) in [
+            ("key_point", &summary.key_points),
+            ("decision", &summary.decisions),
+            ("action_item", &summary.action_items),
+        ] {
+            for (position, text) in points.iter().enumerate() {
+                transaction.execute(
+                    "INSERT INTO summary_points(recording_id, kind, position, text) VALUES(?1, ?2, ?3, ?4)",
+                    params![recording_id, kind, position as i64, text],
+                )?;
+            }
         }
         transaction.commit()?;
         Ok(())
@@ -383,11 +436,20 @@ impl Repository {
             .lock()
             .map_err(|_| AppError::Storage("database lock poisoned".into()))?;
         let mut statement = connection.prepare(
-            "SELECT asset_path FROM recordings WHERE deleted_at IS NOT NULL AND deleted_at < ?1",
+            "SELECT asset_path, journal_path FROM recordings WHERE deleted_at IS NOT NULL AND deleted_at < ?1",
         )?;
         let paths = statement
-            .query_map([&cutoff], |row| row.get(0))?
-            .collect::<Result<Vec<String>, _>>()?;
+            .query_map([&cutoff], |row| {
+                Ok([
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                ])
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .flatten()
+            .collect::<Vec<String>>();
         drop(statement);
         connection.execute(
             "DELETE FROM recordings WHERE deleted_at IS NOT NULL AND deleted_at < ?1",
@@ -425,6 +487,7 @@ fn recording_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Recording> {
         deleted_at: row.get(11)?,
         highlights: Vec::new(),
         transcript: None,
+        summary: None,
     })
 }
 
@@ -459,6 +522,44 @@ fn transcript_for(connection: &Connection, recording_id: &str) -> AppResult<Opti
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Some(transcript))
+}
+
+fn summary_for(connection: &Connection, recording_id: &str) -> AppResult<Option<Summary>> {
+    let summary = connection
+        .query_row(
+            "SELECT suggested_title,overview,model,created_at FROM summaries WHERE recording_id=?1",
+            [recording_id],
+            |row| {
+                Ok(Summary {
+                    suggested_title: row.get(0)?,
+                    overview: row.get(1)?,
+                    key_points: Vec::new(),
+                    decisions: Vec::new(),
+                    action_items: Vec::new(),
+                    model: row.get(2)?,
+                    created_at: row.get(3)?,
+                })
+            },
+        )
+        .optional()?;
+    let Some(mut summary) = summary else {
+        return Ok(None);
+    };
+    let mut statement = connection.prepare(
+        "SELECT kind,text FROM summary_points WHERE recording_id=?1 ORDER BY kind, position",
+    )?;
+    for row in statement.query_map([recording_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })? {
+        let (kind, text) = row?;
+        match kind.as_str() {
+            "key_point" => summary.key_points.push(text),
+            "decision" => summary.decisions.push(text),
+            "action_item" => summary.action_items.push(text),
+            _ => {}
+        }
+    }
+    Ok(Some(summary))
 }
 
 fn ensure_column(
@@ -515,6 +616,7 @@ mod tests {
             deleted_at: None,
             highlights: Vec::new(),
             transcript: None,
+            summary: None,
         }
     }
 
@@ -537,6 +639,30 @@ mod tests {
             reopened.settings().unwrap().whisper_model_path.as_deref(),
             Some("model.bin")
         );
+    }
+
+    #[test]
+    fn purge_expired_handles_recordings_that_never_finalized() {
+        let temp = tempfile::tempdir().unwrap();
+        let repository = Repository::open(&temp.path().join("library.sqlite3")).unwrap();
+        repository
+            .insert_recording(&test_recording("unfinished"), "journal.bin", &[0; 32])
+            .unwrap();
+        let expired = (Utc::now() - chrono::Duration::days(30)).to_rfc3339();
+        {
+            let connection = repository.connection.lock().unwrap();
+            connection
+                .execute(
+                    "UPDATE recordings SET deleted_at=?1 WHERE id='unfinished'",
+                    [&expired],
+                )
+                .unwrap();
+        }
+
+        // asset_path is still NULL because the recording never finalized.
+        let paths = repository.purge_expired().unwrap();
+        assert_eq!(paths, vec!["journal.bin".to_string()]);
+        assert!(repository.list_recordings(true).unwrap().is_empty());
     }
 
     #[test]
@@ -565,6 +691,32 @@ mod tests {
             .set_deleted_many(&["one".into(), "two".into()], false)
             .unwrap();
         assert_eq!(repository.list_recordings(false).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn summaries_round_trip_with_their_points_in_order() {
+        let temp = tempfile::tempdir().unwrap();
+        let repository = Repository::open(&temp.path().join("library.sqlite3")).unwrap();
+        repository
+            .insert_recording(&test_recording("one"), "journal", &[0; 32])
+            .unwrap();
+        let summary = Summary {
+            suggested_title: "Nordic pricing tiers".into(),
+            overview: "The team kept three tiers and set a March launch.".into(),
+            key_points: vec!["Tier three sits too close to tier two".into(), "Support load is the risk".into()],
+            decisions: vec!["Launch in March".into()],
+            action_items: vec!["Mette rewrites the pricing page".into()],
+            model: "qwen2.5-1.5b-instruct-q4_k_m.gguf".into(),
+            created_at: Utc::now().to_rfc3339(),
+        };
+
+        repository.save_summary("one", &summary).unwrap();
+
+        assert_eq!(repository.recording("one").unwrap().summary, Some(summary.clone()));
+        // Re-summarizing replaces the previous points rather than appending.
+        let shorter = Summary { key_points: vec!["Only one point now".into()], ..summary };
+        repository.save_summary("one", &shorter).unwrap();
+        assert_eq!(repository.recording("one").unwrap().summary, Some(shorter));
     }
 
     #[test]

@@ -33,6 +33,38 @@ export interface Transcript {
   segments: TranscriptSegment[];
 }
 
+export interface Summary {
+  suggestedTitle: string;
+  overview: string;
+  keyPoints: string[];
+  decisions: string[];
+  actionItems: string[];
+  model: string;
+  createdAt: string;
+}
+
+export interface SummaryModelInfo {
+  id: string;
+  name: string;
+  description: string;
+  sizeBytes: number;
+  installed: boolean;
+}
+
+export interface SummaryModelDownloadProgress {
+  modelId: string;
+  downloadedBytes: number;
+  totalBytes: number;
+}
+
+export type SummarizationStage = "loading" | "analyzing" | "writing";
+
+export interface SummarizationProgress {
+  recordingId: string;
+  stage: SummarizationStage;
+  progress: number;
+}
+
 export interface WhisperModelInfo {
   id: string;
   name: string;
@@ -45,6 +77,14 @@ export interface WhisperModelDownloadProgress {
   modelId: string;
   downloadedBytes: number;
   totalBytes: number;
+}
+
+export type TranscriptionStage = "decoding" | "transcribing";
+
+export interface TranscriptionProgress {
+  recordingId: string;
+  stage: TranscriptionStage;
+  progress: number;
 }
 
 export interface Recording {
@@ -62,6 +102,7 @@ export interface Recording {
   deletedAt: string | null;
   highlights: Highlight[];
   transcript: Transcript | null;
+  summary: Summary | null;
 }
 
 export interface RecordingSession {
@@ -88,6 +129,7 @@ export interface AppSettings {
   launchAtLogin: boolean;
   microphoneId: string | null;
   whisperModelPath: string | null;
+  summaryModelPath: string | null;
 }
 
 export interface AppSnapshot {

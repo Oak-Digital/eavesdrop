@@ -44,6 +44,60 @@ pub struct Transcript {
     pub segments: Vec<TranscriptSegment>,
 }
 
+/// A local, model-written digest of one meeting.
+///
+/// `suggested_title` is offered as a rename for the recording; the user accepts
+/// it explicitly rather than having the library retitle itself.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Summary {
+    pub suggested_title: String,
+    pub overview: String,
+    pub key_points: Vec<String>,
+    pub decisions: Vec<String>,
+    pub action_items: Vec<String>,
+    pub model: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SummaryModelInfo {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub size_bytes: u64,
+    pub installed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SummaryModelDownloadProgress {
+    pub model_id: String,
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
+}
+
+/// Progress of an in-flight summary, emitted as `summarization-progress`.
+///
+/// Loading a multi-gigabyte model takes long enough to need its own stage, and
+/// a long meeting is analyzed in slices before the summary itself is written.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SummarizationProgress {
+    pub recording_id: String,
+    pub stage: SummarizationStage,
+    pub progress: f32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SummarizationStage {
+    Loading,
+    Analyzing,
+    Writing,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WhisperModelInfo {
@@ -60,6 +114,25 @@ pub struct WhisperModelDownloadProgress {
     pub model_id: String,
     pub downloaded_bytes: u64,
     pub total_bytes: u64,
+}
+
+/// Progress of an in-flight transcription, emitted as `transcription-progress`.
+///
+/// `progress` is 0.0..=1.0. Decoding runs before Whisper reports anything, so
+/// `stage` lets the UI distinguish "still unpacking audio" from "transcribing".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptionProgress {
+    pub recording_id: String,
+    pub stage: TranscriptionStage,
+    pub progress: f32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TranscriptionStage {
+    Decoding,
+    Transcribing,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,6 +152,7 @@ pub struct Recording {
     pub deleted_at: Option<String>,
     pub highlights: Vec<Highlight>,
     pub transcript: Option<Transcript>,
+    pub summary: Option<Summary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -145,6 +219,7 @@ pub struct AppSettings {
     pub launch_at_login: bool,
     pub microphone_id: Option<String>,
     pub whisper_model_path: Option<String>,
+    pub summary_model_path: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -155,6 +230,7 @@ impl Default for AppSettings {
             launch_at_login: false,
             microphone_id: None,
             whisper_model_path: None,
+            summary_model_path: None,
         }
     }
 }
@@ -183,6 +259,7 @@ pub struct SettingsPatch {
     pub launch_at_login: Option<bool>,
     pub microphone_id: Option<Option<String>>,
     pub whisper_model_path: Option<Option<String>>,
+    pub summary_model_path: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

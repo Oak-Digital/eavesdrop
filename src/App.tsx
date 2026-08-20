@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import * as api from "./api";
-import { formatDate, formatDuration, formatSize } from "./format";
+import { formatDate, formatDuration, formatSize, transcriptionPercentage } from "./format";
 import {
   ChevronLeftIcon,
   ComputerIcon,
@@ -17,7 +17,7 @@ import {
   StopIcon,
   TrashIcon,
 } from "./icons";
-import type { AppSnapshot, CaptureMode, Recording, WhisperModelDownloadProgress, WhisperModelInfo } from "./types";
+import type { AppSnapshot, CaptureMode, Recording, SummarizationStage, SummaryModelInfo, TranscriptionStage, WhisperModelDownloadProgress, WhisperModelInfo } from "./types";
 import { useAppState } from "./useAppState";
 import { useUpdater } from "./useUpdater";
 
@@ -183,6 +183,7 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
+  const [activity, setActivity] = useState<ActivityState | null>(null);
 
   const reload = async () => {
     setLoading(true);
@@ -212,6 +213,20 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
       setRecordings((items) => [recording, ...items.filter((item) => item.id !== recording.id)]);
       setSelected((current) => current?.id === recording.id ? recording : current);
       setLoading(false);
+    }).then(keep);
+
+    // Ignore stragglers for a run the detail view already finished or cancelled.
+    const advance = (recordingId: string, label: string, progress: number) =>
+      setActivity((current) => current && current.recordingId === recordingId
+        ? { ...current, label, progress }
+        : current);
+
+    void api.onTranscriptionProgress((progress) => {
+      advance(progress.recordingId, transcriptionLabel(progress.stage), progress.progress);
+    }).then(keep);
+
+    void api.onSummarizationProgress((progress) => {
+      advance(progress.recordingId, summarizationLabel(progress.stage), progress.progress);
     }).then(keep);
 
     void api.onOpenRecording(async (recordingId) => {
@@ -292,6 +307,7 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
           <button className={page === "deleted" ? "active" : ""} onClick={() => { setPage("deleted"); setSelected(null); }}><TrashIcon /> Recently deleted</button>
         </nav>
         <div className="sidebar-bottom">
+          {activity && <ActivityProgressCard activity={activity} />}
           <button className={page === "settings" ? "active" : ""} onClick={() => { setPage("settings"); setSelected(null); }}><SettingsIcon /> Settings</button>
           <div className="privacy-line">Audio stays on this computer</div>
         </div>
@@ -306,11 +322,18 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
             recording={selected}
             deleted={page === "deleted"}
             whisperModelPath={app.snapshot.settings.whisperModelPath}
+            summaryModelPath={app.snapshot.settings.summaryModelPath}
             onChooseWhisperModel={async () => {
               const path = await api.selectWhisperModel();
               if (path) await app.updateSettings({ whisperModelPath: path });
             }}
+            onChooseSummaryModel={async () => {
+              const path = await api.selectSummaryModel();
+              if (path) await app.updateSettings({ summaryModelPath: path });
+            }}
             onBack={() => setSelected(null)}
+            onJobStart={(item, label) => setActivity({ recordingId: item.id, title: item.title, label, progress: 0 })}
+            onJobEnd={(id) => setActivity((current) => current?.recordingId === id ? null : current)}
             onChanged={(recording) => {
               setSelected(recording);
               setRecordings((items) => items.map((item) => item.id === recording.id ? recording : item));
@@ -354,6 +377,42 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
   );
 }
 
+// One long-running local job — a transcript or a summary — shown in the sidebar.
+type ActivityState = { recordingId: string; title: string; label: string; progress: number };
+
+function transcriptionLabel(stage: TranscriptionStage) {
+  return stage === "decoding" ? "Preparing audio" : "Transcribing";
+}
+
+function summarizationLabel(stage: SummarizationStage) {
+  if (stage === "loading") return "Loading summary model";
+  return stage === "analyzing" ? "Reading the meeting" : "Writing the summary";
+}
+
+function ActivityProgressCard({ activity }: { activity: ActivityState }) {
+  const percent = transcriptionPercentage(activity.progress);
+  const label = activity.label;
+  return (
+    <div className="sidebar-progress" role="status" aria-live="polite">
+      <div className="sidebar-progress-head">
+        <span className="sidebar-progress-label">{label}</span>
+        <span className="sidebar-progress-value">{percent}%</span>
+      </div>
+      <div
+        className="sidebar-progress-track"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent}
+        aria-label={`${label} ${activity.title}`}
+      >
+        <div className="sidebar-progress-fill" style={{ width: `${percent}%` }} />
+      </div>
+      <div className="sidebar-progress-title" title={activity.title}>{activity.title}</div>
+    </div>
+  );
+}
+
 function RecordingList({ items, loading, deleted, selectionMode, selectedIds, onSelect, onToggleSelection }: { items: Recording[]; loading: boolean; deleted: boolean; selectionMode: boolean; selectedIds: Set<string>; onSelect: (item: Recording) => void; onToggleSelection: (id: string) => void }) {
   if (loading) return <div className="empty-state">Loading recordings…</div>;
   if (items.length === 0) return <div className="empty-state"><RecordingsIcon /><strong>{deleted ? "Nothing recently deleted" : "No recordings yet"}</strong><p>{deleted ? "Deleted recordings will appear here for seven days." : "Start from the menu bar or the button above."}</p></div>;
@@ -374,17 +433,34 @@ function RecordingList({ items, loading, deleted, selectionMode, selectedIds, on
   );
 }
 
-function RecordingDetail({ recording, deleted, whisperModelPath, onChooseWhisperModel, onBack, onChanged, onRemoved }: { recording: Recording; deleted: boolean; whisperModelPath: string | null; onChooseWhisperModel: () => Promise<void>; onBack: () => void; onChanged: (item: Recording) => void; onRemoved: () => void }) {
+function RecordingDetail({ recording, deleted, whisperModelPath, summaryModelPath, onChooseWhisperModel, onChooseSummaryModel, onBack, onJobStart, onJobEnd, onChanged, onRemoved }: { recording: Recording; deleted: boolean; whisperModelPath: string | null; summaryModelPath: string | null; onChooseWhisperModel: () => Promise<void>; onChooseSummaryModel: () => Promise<void>; onBack: () => void; onJobStart: (item: Recording, label: string) => void; onJobEnd: (id: string) => void; onChanged: (item: Recording) => void; onRemoved: () => void }) {
   const [title, setTitle] = useState(recording.title);
   const [busy, setBusy] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
+  const [summarizing, setSummarizing] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const rename = async (next: string) => onChanged(await api.renameRecording(recording.id, next));
   const saveTitle = async () => {
     const trimmed = title.trim();
     if (!trimmed || trimmed === recording.title) return;
     setBusy(true);
-    onChanged(await api.renameRecording(recording.id, trimmed));
+    await rename(trimmed);
     setBusy(false);
+  };
+  // The title input is uncontrolled across recordings, so accepting a suggested
+  // title has to move the field too, not just the stored recording.
+  const useSuggestedTitle = async (suggested: string) => {
+    setBusy(true);
+    setTitle(suggested);
+    try {
+      await rename(suggested);
+    } catch (cause) {
+      setSummaryError(cause instanceof Error ? cause.message : String(cause));
+      setTitle(recording.title);
+    } finally {
+      setBusy(false);
+    }
   };
   return (
     <div className="recording-detail">
@@ -400,6 +476,46 @@ function RecordingDetail({ recording, deleted, whisperModelPath, onChooseWhisper
 
       <EncryptedAudioPlayer recording={recording} />
 
+      <section className="detail-section summary-section">
+        <div className="section-heading">
+          <div><h2>Summary</h2>{recording.summary && <span>{recording.summary.model}</span>}</div>
+          {!deleted && (summaryModelPath ? (
+            <button className="button secondary compact-button" disabled={summarizing || !recording.transcript} onClick={async () => {
+              setSummarizing(true);
+              setSummaryError(null);
+              onJobStart(recording, "Loading summary model");
+              try {
+                onChanged(await api.summarizeRecording(recording.id));
+              } catch (cause) {
+                setSummaryError(cause instanceof Error ? cause.message : String(cause));
+              } finally {
+                setSummarizing(false);
+                onJobEnd(recording.id);
+              }
+            }}>{summarizing ? "Summarizing…" : recording.summary ? "Summarize again" : "Summarize"}</button>
+          ) : <button className="button secondary compact-button" onClick={onChooseSummaryModel}>Choose summary model</button>)}
+        </div>
+        {summaryError && <p className="player-error" role="alert">{summaryError}</p>}
+        {recording.summary ? (
+          <div className="summary-body">
+            <p className="summary-overview">{recording.summary.overview}</p>
+            {recording.summary.suggestedTitle && recording.summary.suggestedTitle !== recording.title && (
+              <div className="summary-title-suggestion">
+                <div><strong>Suggested title</strong><span>{recording.summary.suggestedTitle}</span></div>
+                <button className="button secondary compact-button" disabled={busy} onClick={() => useSuggestedTitle(recording.summary!.suggestedTitle)}>Use this title</button>
+              </div>
+            )}
+            <SummaryList heading="Key points" items={recording.summary.keyPoints} />
+            <SummaryList heading="Decisions" items={recording.summary.decisions} />
+            <SummaryList heading="Action items" items={recording.summary.actionItems} />
+          </div>
+        ) : <p className="section-empty">{!summaryModelPath
+          ? "Install a local summary model to have meetings summarized on this computer."
+          : recording.transcript
+            ? "Summarize this meeting on-device, and get a title that says what it was about."
+            : "Transcribe this recording first — the summary is written from the transcript."}</p>}
+      </section>
+
       <section className="detail-section transcript-section">
         <div className="section-heading">
           <div><h2>Transcript</h2>{recording.transcript?.language && <span>{recording.transcript.language}</span>}</div>
@@ -407,12 +523,14 @@ function RecordingDetail({ recording, deleted, whisperModelPath, onChooseWhisper
             <button className="button secondary compact-button" disabled={transcribing || recording.sizeBytes === 0} onClick={async () => {
               setTranscribing(true);
               setTranscriptionError(null);
+              onJobStart(recording, "Preparing audio");
               try {
                 onChanged(await api.transcribeRecording(recording.id));
               } catch (cause) {
                 setTranscriptionError(cause instanceof Error ? cause.message : String(cause));
               } finally {
                 setTranscribing(false);
+                onJobEnd(recording.id);
               }
             }}>{transcribing ? "Transcribing…" : recording.transcript ? "Transcribe again" : "Transcribe"}</button>
           ) : <button className="button secondary compact-button" onClick={onChooseWhisperModel}>Choose Whisper model</button>)}
@@ -440,6 +558,16 @@ function RecordingDetail({ recording, deleted, whisperModelPath, onChooseWhisper
       </section>
 
       {!deleted && <button className="danger-link" disabled={busy} onClick={async () => { if (window.confirm("Move this recording to Recently Deleted?")) { await api.deleteRecording(recording.id); onRemoved(); } }}><TrashIcon /> Move to Recently Deleted</button>}
+    </div>
+  );
+}
+
+function SummaryList({ heading, items }: { heading: string; items: string[] }) {
+  if (!items.length) return null;
+  return (
+    <div className="summary-list">
+      <h3>{heading}</h3>
+      <ul>{items.map((item, index) => <li key={`${heading}-${index}`}>{item}</li>)}</ul>
     </div>
   );
 }
@@ -509,6 +637,10 @@ function SettingsPage({ app, updater }: { app: AppController; updater: AppUpdate
   const [selectedWhisperModel, setSelectedWhisperModel] = useState("base");
   const [modelProgress, setModelProgress] = useState<WhisperModelDownloadProgress | null>(null);
   const [installingModel, setInstallingModel] = useState(false);
+  const [summaryModels, setSummaryModels] = useState<SummaryModelInfo[]>([]);
+  const [selectedSummaryModel, setSelectedSummaryModel] = useState("qwen2.5-1.5b");
+  const [summaryModelProgress, setSummaryModelProgress] = useState<WhisperModelDownloadProgress | null>(null);
+  const [installingSummaryModel, setInstallingSummaryModel] = useState(false);
   const recordingActive = ["starting", "recording", "paused", "finalizing"].includes(snapshot.session.phase);
   const update = updater.state;
   const updateDescription = update.phase === "available"
@@ -522,17 +654,25 @@ function SettingsPage({ app, updater }: { app: AppController; updater: AppUpdate
           : "Eavesdrop checks for signed updates when it starts.";
   useEffect(() => {
     let disposed = false;
-    let unlisten: () => void = () => undefined;
+    const cleanups: Array<() => void> = [];
+    const keep = (cleanup: () => void) => { if (disposed) cleanup(); else cleanups.push(cleanup); };
     void api.listWhisperModels().then((models) => { if (!disposed) setWhisperModels(models); });
+    void api.listSummaryModels().then((models) => { if (!disposed) setSummaryModels(models); });
     void api.onWhisperModelDownloadProgress((progress) => {
       if (!disposed) setModelProgress(progress);
-    }).then((cleanup) => { if (disposed) cleanup(); else unlisten = cleanup; });
-    return () => { disposed = true; unlisten(); };
+    }).then(keep);
+    void api.onSummaryModelDownloadProgress((progress) => {
+      if (!disposed) setSummaryModelProgress(progress);
+    }).then(keep);
+    return () => { disposed = true; cleanups.forEach((cleanup) => cleanup()); };
   }, []);
   const selectedModel = whisperModels.find((model) => model.id === selectedWhisperModel);
-  const modelPercentage = modelProgress?.totalBytes
-    ? Math.min(100, Math.round(modelProgress.downloadedBytes / modelProgress.totalBytes * 100))
+  const selectedSummary = summaryModels.find((model) => model.id === selectedSummaryModel);
+  const percentageOf = (progress: WhisperModelDownloadProgress | null) => progress?.totalBytes
+    ? Math.min(100, Math.round(progress.downloadedBytes / progress.totalBytes * 100))
     : 0;
+  const modelPercentage = percentageOf(modelProgress);
+  const summaryModelPercentage = percentageOf(summaryModelProgress);
   return (
     <div className="settings-page">
       <header className="content-header"><div><h1>Settings</h1><p>Recording sources and app behavior.</p></div></header>
@@ -566,6 +706,33 @@ function SettingsPage({ app, updater }: { app: AppController; updater: AppUpdate
           </div>
           {selectedModel && <p className="model-description">{selectedModel.description}</p>}
           {installingModel && <progress className="update-progress" max={100} value={modelPercentage} aria-label="Whisper model download progress" />}
+        </div>
+      </section>
+      <section className="settings-section">
+        <h2>Local summaries</h2>
+        <div className="model-setting">
+          <div><strong>Open-weight language model</strong><p>{snapshot.settings.summaryModelPath ? `Using ${modelFileName(snapshot.settings.summaryModelPath)}` : "Summaries and suggested titles are written on this computer, from the transcript."}</p></div>
+          <div className="model-install-controls">
+            <select value={selectedSummaryModel} onChange={(event) => setSelectedSummaryModel(event.target.value)} aria-label="Summary model">
+              {summaryModels.map((model) => <option key={model.id} value={model.id}>{model.name} · {formatSize(model.sizeBytes)}{model.installed ? " · Installed" : ""}</option>)}
+            </select>
+            <button className="button primary" disabled={!selectedSummary || installingSummaryModel} onClick={async () => {
+              setInstallingSummaryModel(true);
+              setSummaryModelProgress(null);
+              try {
+                await app.installSummaryModel(selectedSummaryModel);
+                setSummaryModels(await api.listSummaryModels());
+              } finally {
+                setInstallingSummaryModel(false);
+              }
+            }}>{installingSummaryModel ? `${summaryModelPercentage}%` : selectedSummary?.installed ? "Use model" : "Install"}</button>
+            <button className="button secondary" disabled={installingSummaryModel} onClick={async () => {
+              const path = await api.selectSummaryModel();
+              if (path) await app.updateSettings({ summaryModelPath: path });
+            }}>Choose existing…</button>
+          </div>
+          {selectedSummary && <p className="model-description">{selectedSummary.description}</p>}
+          {installingSummaryModel && <progress className="update-progress" max={100} value={summaryModelPercentage} aria-label="Summary model download progress" />}
         </div>
       </section>
       <section className="settings-section">

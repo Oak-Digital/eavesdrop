@@ -10,7 +10,7 @@ use crate::{
     error::{AppError, AppResult},
     models::{
         AppSnapshot, OnboardingSettings, Recording, RecordingSession, SettingsPatch,
-        StartRecordingInput, WhisperModelInfo,
+        StartRecordingInput, SummaryModelInfo, WhisperModelInfo,
     },
     state::AppState,
 };
@@ -132,9 +132,34 @@ pub fn get_recording_audio(state: State<'_, AppState>, id: String) -> AppResult<
 
 #[tauri::command]
 pub async fn transcribe_recording(app: AppHandle, id: String) -> AppResult<Recording> {
-    tauri::async_runtime::spawn_blocking(move || app.state::<AppState>().transcribe_recording(&id))
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<AppState>().transcribe_recording(&app, &id)
+    })
         .await
         .map_err(|error| AppError::Other(format!("transcription task failed: {error}")))?
+}
+
+#[tauri::command]
+pub async fn summarize_recording(app: AppHandle, id: String) -> AppResult<Recording> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<AppState>().summarize_recording(&app, &id)
+    })
+    .await
+    .map_err(|error| AppError::Other(format!("summary task failed: {error}")))?
+}
+
+#[tauri::command]
+pub fn list_summary_models(state: State<'_, AppState>) -> Vec<SummaryModelInfo> {
+    state.summary_models()
+}
+
+#[tauri::command]
+pub async fn install_summary_model(app: AppHandle, model_id: String) -> AppResult<AppSnapshot> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<AppState>().install_summary_model(&app, &model_id)
+    })
+    .await
+    .map_err(|error| AppError::Other(format!("model installation task failed: {error}")))?
 }
 
 #[tauri::command]

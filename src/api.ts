@@ -9,6 +9,10 @@ import type {
   Recording,
   RecordingSession,
   StartRecordingInput,
+  SummarizationProgress,
+  SummaryModelDownloadProgress,
+  SummaryModelInfo,
+  TranscriptionProgress,
   WhisperModelDownloadProgress,
   WhisperModelInfo,
 } from "./types";
@@ -37,6 +41,7 @@ const mockSnapshot: AppSnapshot = {
     launchAtLogin: false,
     microphoneId: null,
     whisperModelPath: null,
+    summaryModelPath: null,
   },
   devices: [{ id: "default", name: "Default microphone", isDefault: true }],
 };
@@ -44,6 +49,7 @@ const mockSnapshot: AppSnapshot = {
 let browserSnapshot = structuredClone(mockSnapshot);
 let browserRecordings: Recording[] = [];
 let browserInstalledWhisperModels = new Set<string>();
+let browserInstalledSummaryModels = new Set<string>();
 
 async function command<T>(name: string, args?: Record<string, unknown>): Promise<T> {
   if (!isTauri()) throw new Error(`Command ${name} is only available in the desktop app`);
@@ -119,6 +125,7 @@ export async function stopRecording(): Promise<Recording> {
     deletedAt: null,
     highlights: [],
     transcript: null,
+    summary: null,
   };
   browserRecordings.unshift(recording);
   browserSnapshot.session = structuredClone(idleSession);
@@ -214,6 +221,56 @@ export async function transcribeRecording(id: string): Promise<Recording> {
   return structuredClone(item);
 }
 
+export async function selectSummaryModel(): Promise<string | null> {
+  if (!isTauri()) return "/models/summary.gguf";
+  const path = await open({
+    multiple: false,
+    directory: false,
+    filters: [{ name: "GGUF model", extensions: ["gguf"] }],
+  });
+  return typeof path === "string" ? path : null;
+}
+
+export async function summarizeRecording(id: string): Promise<Recording> {
+  if (isTauri()) return command<Recording>("summarize_recording", { id });
+  const item = browserRecordings.find((recording) => recording.id === id)!;
+  item.summary = {
+    suggestedTitle: "Example local summary",
+    overview: "A short, on-device summary of the meeting.",
+    keyPoints: ["The first thing discussed."],
+    decisions: ["Ship it."],
+    actionItems: ["Someone follows up."],
+    model: "summary.gguf",
+    createdAt: new Date().toISOString(),
+  };
+  return structuredClone(item);
+}
+
+export async function listSummaryModels(): Promise<SummaryModelInfo[]> {
+  if (isTauri()) return command<SummaryModelInfo[]>("list_summary_models");
+  return [
+    { id: "qwen2.5-1.5b", name: "Compact", description: "Fast on any Mac", sizeBytes: 1_117_320_736 },
+    { id: "qwen2.5-7b", name: "Detailed", description: "Sharper, slower", sizeBytes: 4_683_074_240 },
+  ].map((model) => ({ ...model, installed: browserInstalledSummaryModels.has(model.id) }));
+}
+
+export async function installSummaryModel(modelId: string): Promise<AppSnapshot> {
+  if (isTauri()) return command<AppSnapshot>("install_summary_model", { modelId });
+  browserInstalledSummaryModels.add(modelId);
+  browserSnapshot.settings.summaryModelPath = `/models/${modelId}.gguf`;
+  return structuredClone(browserSnapshot);
+}
+
+export async function onSummarizationProgress(handler: (progress: SummarizationProgress) => void): Promise<UnlistenFn> {
+  if (!isTauri()) return () => undefined;
+  return listen<SummarizationProgress>("summarization-progress", (event) => handler(event.payload));
+}
+
+export async function onSummaryModelDownloadProgress(handler: (progress: SummaryModelDownloadProgress) => void): Promise<UnlistenFn> {
+  if (!isTauri()) return () => undefined;
+  return listen<SummaryModelDownloadProgress>("summary-model-download-progress", (event) => handler(event.payload));
+}
+
 export async function listWhisperModels(): Promise<WhisperModelInfo[]> {
   if (isTauri()) return command<WhisperModelInfo[]>("list_whisper_models");
   return [
@@ -228,6 +285,11 @@ export async function installWhisperModel(modelId: string): Promise<AppSnapshot>
   browserInstalledWhisperModels.add(modelId);
   browserSnapshot.settings.whisperModelPath = `/models/ggml-${modelId}.bin`;
   return structuredClone(browserSnapshot);
+}
+
+export async function onTranscriptionProgress(handler: (progress: TranscriptionProgress) => void): Promise<UnlistenFn> {
+  if (!isTauri()) return () => undefined;
+  return listen<TranscriptionProgress>("transcription-progress", (event) => handler(event.payload));
 }
 
 export async function onWhisperModelDownloadProgress(handler: (progress: WhisperModelDownloadProgress) => void): Promise<UnlistenFn> {
@@ -294,4 +356,5 @@ export function resetBrowserMock() {
   browserSnapshot = structuredClone(mockSnapshot);
   browserRecordings = [];
   browserInstalledWhisperModels = new Set();
+  browserInstalledSummaryModels = new Set();
 }
