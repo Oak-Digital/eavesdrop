@@ -4,6 +4,10 @@ on:
   push:
     tags:
       - "v*.*.*"
+  # Build the full matrix on demand without publishing anything, so a change
+  # that only breaks one platform is found before a tag exists. The publish job
+  # is skipped for this event; everything up to it runs exactly as on a tag.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -29,7 +33,11 @@ jobs:
           cargo_version=$(sed -n '/^\[package\]/,/^\[/s/^version = "\([^"]*\)"/\1/p' src-tauri/Cargo.toml)
           test "$version" = "$config_version"
           test "$version" = "$cargo_version"
-          test "v$version" = "$GITHUB_REF_NAME"
+          # On workflow_dispatch the ref is a branch, so only a tag build has a
+          # version to agree with.
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            test "v$version" = "$GITHUB_REF_NAME"
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
   build-macos:
@@ -230,6 +238,7 @@ jobs:
 
   publish:
     needs: [validate, build-macos, build-windows]
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
