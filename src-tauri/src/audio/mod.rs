@@ -33,6 +33,10 @@ const FRAME_SAMPLES: usize = 480;
 const SEGMENT_SAMPLES: usize = (SAMPLE_RATE as usize) * 2;
 const METER_EMIT_INTERVAL: Duration = Duration::from_millis(50);
 const METER_STALE_AFTER: Duration = Duration::from_millis(150);
+// ScreenCaptureKit keeps delivering buffers while nothing is playing (silence
+// arrives as zero-filled samples), so a gap with no samples at all means the
+// audio tap itself has stopped — not that the meeting went quiet.
+const SYSTEM_AUDIO_STALL_AFTER: Duration = Duration::from_secs(6);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceKind {
@@ -365,6 +369,28 @@ fn linear_resample(input: &[f32], source_rate: u32, target_rate: u32) -> Vec<f32
         .collect()
 }
 
+/// Decides whether an online recording should warn that computer audio is missing.
+///
+/// ScreenCaptureKit streams zero-filled buffers through silence, so `quiet_for`
+/// measures a total absence of samples — the tap having died — rather than a
+/// quiet meeting. `ever_received` separates a stream that never produced
+/// anything (usually permission) from one that stopped partway (usually an
+/// output device change, such as AirPods connecting mid-call).
+fn system_audio_alert(
+    mode: CaptureMode,
+    quiet_for: Duration,
+    ever_received: bool,
+) -> Option<&'static str> {
+    if mode != CaptureMode::Online || quiet_for <= SYSTEM_AUDIO_STALL_AFTER {
+        return None;
+    }
+    Some(if ever_received {
+        "Computer audio stopped arriving. This usually follows an output device change, such as AirPods connecting. Stop and restart the recording to capture the other participants."
+    } else {
+        "No computer audio is being captured, so only your microphone is being recorded. Check that Eavesdrop has Screen Recording permission, then stop and restart the recording."
+    })
+}
+
 fn capture_worker(
     app: AppHandle,
     mode: CaptureMode,
@@ -387,6 +413,8 @@ fn capture_worker(
     let mut warning = None;
     let mut last_disk_check = Instant::now();
     let mut low_disk_warning_sent = false;
+    let capture_started = Instant::now();
+    let mut system_stall_warned = false;
 
     #[cfg(feature = "aec3")]
     let echo_processor = {
@@ -413,6 +441,8 @@ fn capture_worker(
                     system_target = chunk.level;
                     last_system_sample = Some(Instant::now());
                     system.extend(chunk.samples);
+                    // Re-arm so a later stall is reported again.
+                    system_stall_warned = false;
                 }
             },
             Ok(CaptureMessage::Pause) => {
@@ -468,6 +498,17 @@ fn capture_worker(
             }
             if last_system_sample.is_none_or(|last| now.duration_since(last) > METER_STALE_AFTER) {
                 system_target = 0.0;
+            }
+            if !system_stall_warned {
+                let quiet_for = last_system_sample
+                    .map_or_else(|| now.duration_since(capture_started), |last| now.duration_since(last));
+                if let Some(message) =
+                    system_audio_alert(mode, quiet_for, last_system_sample.is_some())
+                {
+                    system_stall_warned = true;
+                    warning = Some(message.to_string());
+                    let _ = app.emit("capture-warning", message);
+                }
             }
             mic_level = smooth_meter(mic_level, mic_target);
             system_level = smooth_meter(system_level, system_target);
@@ -701,6 +742,36 @@ mod tests {
     fn resampling_keeps_expected_duration() {
         let source = vec![0.25; 44_100];
         assert_eq!(linear_resample(&source, 44_100, 48_000).len(), 48_000);
+    }
+
+    #[test]
+    fn an_online_recording_warns_when_computer_audio_never_arrives() {
+        let message = system_audio_alert(CaptureMode::Online, Duration::from_secs(10), false)
+            .expect("a warning");
+        assert!(message.contains("No computer audio"));
+        assert!(message.contains("Screen Recording"));
+    }
+
+    #[test]
+    fn an_online_recording_warns_when_computer_audio_stops_partway() {
+        let message = system_audio_alert(CaptureMode::Online, Duration::from_secs(10), true)
+            .expect("a warning");
+        assert!(message.contains("stopped arriving"));
+        assert!(message.contains("AirPods"));
+    }
+
+    #[test]
+    fn a_brief_gap_in_computer_audio_is_not_reported() {
+        assert!(system_audio_alert(CaptureMode::Online, Duration::from_millis(400), true).is_none());
+        assert!(
+            system_audio_alert(CaptureMode::Online, SYSTEM_AUDIO_STALL_AFTER, true).is_none(),
+            "the threshold itself must not trip the warning"
+        );
+    }
+
+    #[test]
+    fn an_in_person_recording_never_warns_about_computer_audio() {
+        assert!(system_audio_alert(CaptureMode::InPerson, Duration::from_secs(600), false).is_none());
     }
 
     #[test]

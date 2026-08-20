@@ -12,6 +12,7 @@ use std::process::Command;
 use chrono::Utc;
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::diagnostics::Diagnostics;
 use crate::models::MeetingCandidate;
 use crate::state::AppState;
 
@@ -28,6 +29,7 @@ impl MeetingDetector {
                 let mut first_seen: HashMap<String, Instant> = HashMap::new();
                 let mut dismissed = HashSet::new();
                 let mut emitted: Option<String> = None;
+                let mut poll_failing = false;
                 loop {
                     while let Ok(id) = dismiss_receiver.try_recv() {
                         dismissed.insert(id);
@@ -39,7 +41,24 @@ impl MeetingDetector {
                         .map(|settings| settings.meeting_detection_enabled)
                         .unwrap_or(false);
                     let candidates = if enabled {
-                        platform_candidates()
+                        match guarded_candidates(platform_candidates) {
+                            Some(candidates) => {
+                                poll_failing = false;
+                                candidates
+                            }
+                            None => {
+                                // Log the start of a failing streak only, so a
+                                // persistent fault cannot flood the daily log
+                                // with an entry every poll interval.
+                                if !poll_failing {
+                                    poll_failing = true;
+                                    if let Some(diagnostics) = app.try_state::<Diagnostics>() {
+                                        let _ = diagnostics.event("meeting_detection_poll_panicked");
+                                    }
+                                }
+                                Vec::new()
+                            }
+                        }
                     } else {
                         Vec::new()
                     };
@@ -89,6 +108,19 @@ impl MeetingDetector {
     pub fn dismiss(&self, id: String) {
         let _ = self.dismiss_sender.send(id);
     }
+}
+
+/// Runs one platform poll, containing any panic it raises.
+///
+/// The detector's `loop` lives entirely on the spawned thread, so an escaping
+/// panic does not just drop one poll — it unwinds the thread and stops meeting
+/// detection for the rest of the session with nothing surfaced to the user.
+/// Returns `None` when the poll panicked, so the caller can record it.
+fn guarded_candidates<F>(poll: F) -> Option<Vec<MeetingCandidate>>
+where
+    F: FnOnce() -> Vec<MeetingCandidate> + std::panic::UnwindSafe,
+{
+    std::panic::catch_unwind(poll).ok()
 }
 
 fn candidate(app: &str, display_name: &str) -> MeetingCandidate {
@@ -185,33 +217,33 @@ fn platform_candidates() -> Vec<MeetingCandidate> {
     let Ok(content) = SCShareableContent::get() else {
         return Vec::new();
     };
-    let Some(snapshot) = content.snapshot() else {
-        return Vec::new();
-    };
-    let processes = snapshot
-        .applications
+    // Deliberately avoids `SCShareableContent::snapshot()`. Its batched collectors
+    // in screencapturekit 8.0.1 index a `Vec::with_capacity(..)` scratch buffer that
+    // still has length 0, so they panic as soon as the bridge reports a single
+    // display, window, or application. The per-element accessors used below build
+    // their vectors with `extend` and are sound. Detection polls every 4s, so the
+    // extra FFI round-trips (~70us vs ~5us) do not matter here.
+    let processes = content
+        .applications()
         .iter()
-        .flat_map(|application| {
-            [
-                application.application_name.as_str(),
-                application.bundle_identifier.as_str(),
-            ]
-        })
+        .flat_map(|application| [application.application_name(), application.bundle_identifier()])
         .collect::<Vec<_>>()
         .join("\n");
-    let windows = snapshot
-        .windows
+    let windows = content
+        .windows()
         .iter()
-        .filter(|window| window.window_layer == 0 && (window.is_on_screen || window.is_active))
+        .filter(|window| {
+            window.window_layer() == 0 && (window.is_on_screen() || window.is_active())
+        })
         .filter_map(|window| {
-            let title = window.title.as_deref()?.trim();
+            let title = window.title()?;
+            let title = title.trim();
             if title.is_empty() {
                 return None;
             }
             let owner = window
-                .owning_app_index
-                .and_then(|index| snapshot.applications.get(index))
-                .map(|application| application.application_name.clone())
+                .owning_application()
+                .map(|application| application.application_name())
                 .unwrap_or_default();
             Some(WindowInfo::new(owner, title))
         })
@@ -256,6 +288,44 @@ fn platform_candidates() -> Vec<MeetingCandidate> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_panicking_poll_is_contained_so_the_detector_loop_survives() {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let outcome = guarded_candidates(|| panic!("index out of bounds: the len is 0"));
+        std::panic::set_hook(previous);
+
+        assert!(outcome.is_none());
+        // The poll after a panicking one still runs: the panic was contained
+        // rather than unwinding the thread that owns the detection loop.
+        let recovered = guarded_candidates(|| vec![candidate("zoom", "Zoom")]).unwrap();
+        assert_eq!(
+            recovered.iter().map(|c| c.app.as_str()).collect::<Vec<_>>(),
+            vec!["zoom"]
+        );
+    }
+
+    /// Guards the screencapturekit 8.0.1 regression: the batched `snapshot()`
+    /// path panicked with "index out of bounds: the len is 0" as soon as the
+    /// bridge reported any window, killing the detector thread. Returning an
+    /// empty vec is a valid outcome here (no meeting running, or no screen
+    /// recording permission in the test environment) — panicking is not.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_real_platform_poll_never_panics() {
+        assert!(guarded_candidates(platform_candidates).is_some());
+    }
+
+    #[test]
+    fn a_successful_poll_passes_its_candidates_through_unchanged() {
+        let polled =
+            guarded_candidates(|| vec![candidate("teams", "Microsoft Teams")]).expect("no panic");
+        assert_eq!(polled.len(), 1);
+        assert_eq!(polled[0].app, "teams");
+        assert_eq!(polled[0].display_name, "Microsoft Teams");
+        assert_eq!(polled[0].id, candidate("teams", "Microsoft Teams").id);
+    }
 
     #[test]
     fn detects_supported_meetings_without_generic_browser_false_positive() {
