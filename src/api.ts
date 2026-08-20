@@ -277,6 +277,7 @@ export async function listWhisperModels(): Promise<WhisperModelInfo[]> {
     { id: "tiny", name: "Tiny", description: "Fastest, with lower accuracy", sizeBytes: 77_691_713 },
     { id: "base", name: "Base", description: "Recommended balance of speed and accuracy", sizeBytes: 147_951_465 },
     { id: "small", name: "Small", description: "More accurate, but slower", sizeBytes: 487_601_967 },
+    { id: "large-v3-turbo-q5_0", name: "Turbo", description: "Most accurate, and fast on Apple silicon", sizeBytes: 574_041_195 },
   ].map((model) => ({ ...model, installed: browserInstalledWhisperModels.has(model.id) }));
 }
 

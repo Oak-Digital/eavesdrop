@@ -32,7 +32,7 @@ struct ModelSpec {
     name: &'static str,
     description: &'static str,
     size_bytes: u64,
-    sha1: &'static str,
+    checksum: Checksum<'static>,
 }
 
 const MODELS: &[ModelSpec] = &[
@@ -41,21 +41,33 @@ const MODELS: &[ModelSpec] = &[
         name: "Tiny",
         description: "Fastest, with lower accuracy",
         size_bytes: 77_691_713,
-        sha1: "bd577a113a864445d4c299885e0cb97d4ba92b5f",
+        checksum: Checksum::Sha1("bd577a113a864445d4c299885e0cb97d4ba92b5f"),
     },
     ModelSpec {
         id: "base",
         name: "Base",
         description: "Recommended balance of speed and accuracy",
         size_bytes: 147_951_465,
-        sha1: "465707469ff3a37a2b9b8d8f89f2f99de7299dac",
+        checksum: Checksum::Sha1("465707469ff3a37a2b9b8d8f89f2f99de7299dac"),
     },
     ModelSpec {
         id: "small",
         name: "Small",
         description: "More accurate, but slower",
         size_bytes: 487_601_967,
-        sha1: "55356645c2b361a969dfd0ef2c5a50d530afd8d5",
+        checksum: Checksum::Sha1("55356645c2b361a969dfd0ef2c5a50d530afd8d5"),
+    },
+    // Turbo keeps large-v3's full encoder but cuts the decoder to four layers,
+    // so it is far more accurate than Small at a comparable download size. The
+    // upstream file is git-lfs, and the LFS object id is its sha256.
+    ModelSpec {
+        id: "large-v3-turbo-q5_0",
+        name: "Turbo",
+        description: "Most accurate, and fast on Apple silicon",
+        size_bytes: 574_041_195,
+        checksum: Checksum::Sha256(
+            "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+        ),
     },
 ];
 
@@ -81,7 +93,7 @@ pub fn install_model(app: &AppHandle, models_dir: &Path, model_id: &str) -> AppR
         &format!("{MODEL_BASE_URL}/ggml-{}.bin", model.id),
         &model_path(models_dir, model),
         model.size_bytes,
-        Checksum::Sha1(model.sha1),
+        model.checksum,
         "Whisper model",
         |downloaded, total| emit_download_progress(app, model, downloaded, total),
     )
@@ -351,7 +363,7 @@ mod tests {
 
         let models = available_models(temp.path());
 
-        assert_eq!(models.len(), 3);
+        assert_eq!(models.len(), MODELS.len());
         assert!(
             models
                 .iter()
@@ -369,7 +381,18 @@ mod tests {
     }
 
     #[test]
-    fn model_catalog_publishes_a_sha1_for_every_entry() {
-        assert!(MODELS.iter().all(|model| model.sha1.len() == 40));
+    fn model_catalog_publishes_a_well_formed_checksum_for_every_entry() {
+        for model in MODELS {
+            let (digest, width) = match model.checksum {
+                Checksum::Sha1(digest) => (digest, 40),
+                Checksum::Sha256(digest) => (digest, 64),
+            };
+            assert_eq!(digest.len(), width, "{} has a truncated digest", model.id);
+            assert!(
+                digest.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                "{} has a non-hex digest",
+                model.id
+            );
+        }
     }
 }

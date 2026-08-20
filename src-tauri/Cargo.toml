@@ -51,6 +51,11 @@ webrtc-audio-processing-config = { version = "2.1", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 screencapturekit = { version = "8.0", features = ["macos_13_0"] }
+# Cargo unifies these with the base entries above, so Metal is enabled only on
+# macOS. Both ggml copies must agree: linking one Metal build against one CPU
+# build leaves duplicate backend registrations in a single binary.
+whisper-rs = { version = "0.16", features = ["metal"] }
+llama-cpp-2 = { version = "0.1.154", default-features = false, features = ["metal"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 wasapi = "0.23"
