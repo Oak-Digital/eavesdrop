@@ -13,13 +13,6 @@ mod storage;
 mod summarization;
 mod transcription;
 
-/// The pieces `examples/summary_probe.rs` drives directly, so the local summary
-/// pipeline can be exercised without launching the app.
-pub mod probe {
-    pub use crate::models::{SummarizationStage, Summary, Transcript};
-    pub use crate::summarization::summarize;
-}
-
 use tauri::{
     Emitter, Manager,
     image::Image,

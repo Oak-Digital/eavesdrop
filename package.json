@@ -9,6 +9,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "tauri": "tauri",
+    "summarizer:build": "./scripts/build-summarizer.sh",
     "bundle:mac": "tauri build --bundles app --config '{\"bundle\":{\"createUpdaterArtifacts\":false,\"macOS\":{\"signingIdentity\":\"-\"}}}' && ./scripts/sign-macos-local.sh",
     "version:set": "node scripts/set-version.mjs"
   },

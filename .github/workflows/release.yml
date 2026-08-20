@@ -119,6 +119,10 @@ jobs:
         with:
           workspaces: ./src-tauri -> target
       - run: npm ci
+      # externalBin reads this binary rather than building it, so it has to exist
+      # before Tauri runs. It links llama.cpp; the app links whisper.cpp.
+      - name: Build the summary engine
+        run: ./scripts/build-summarizer.sh universal-apple-darwin
       - name: Build Developer ID-signed macOS app
         if: steps.apple_signing.outputs.enabled == 'true'
         env:
@@ -220,6 +224,9 @@ jobs:
         with:
           workspaces: ./src-tauri -> target
       - run: npm ci
+      - name: Build the summary engine
+        shell: bash
+        run: ./scripts/build-summarizer.sh x86_64-pc-windows-msvc
       - run: npm run tauri build -- --target x86_64-pc-windows-msvc --bundles msi
       - name: Normalize Windows artifacts
         shell: pwsh

@@ -1132,7 +1132,6 @@ dependencies = [
  "cpal",
  "fs2",
  "keyring",
- "llama-cpp-2",
  "mp4",
  "rand",
  "reqwest",
@@ -1160,6 +1159,16 @@ dependencies = [
  "webrtc-audio-processing-config",
  "whisper-rs",
  "windows 0.62.2",
+]
+
+[[package]]
+name = "eavesdrop-summarizer"
+version = "0.1.15"
+dependencies = [
+ "chrono",
+ "llama-cpp-2",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

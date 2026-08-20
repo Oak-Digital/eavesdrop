@@ -9,3 +9,4 @@ src-tauri/gen/schemas/
 *.log
 *.key
 *.p12
+src-tauri/binaries/

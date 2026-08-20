@@ -20,6 +20,11 @@ crate-type = ["rlib"]
 default = []
 aec3 = ["dep:webrtc-audio-processing", "dep:webrtc-audio-processing-config"]
 
+# The summary engine is a separate binary so that llama.cpp's ggml and
+# whisper.cpp's never meet in one link. See summarizer/src/main.rs.
+[workspace]
+members = ["summarizer"]
+
 [build-dependencies]
 tauri-build = { version = "2.5", features = [] }
 
@@ -51,17 +56,15 @@ tauri-plugin-updater = "2.10.1"
 thiserror = "2"
 uuid = { version = "1.21", features = ["v4", "serde"] }
 whisper-rs = "0.16"
-llama-cpp-2 = { version = "0.1.154", default-features = false }
 webrtc-audio-processing = { version = "2.1", features = ["bundled"], optional = true }
 webrtc-audio-processing-config = { version = "2.1", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 screencapturekit = { version = "8.0", features = ["macos_13_0"] }
-# Cargo unifies these with the base entries above, so Metal is enabled only on
-# macOS. Both ggml copies must agree: linking one Metal build against one CPU
-# build leaves duplicate backend registrations in a single binary.
+# Cargo unifies this with the base entry above, so Metal is enabled only on
+# macOS. llama.cpp gets the same treatment in summarizer/Cargo.toml, which is a
+# separate binary and so a separate link.
 whisper-rs = { version = "0.16", features = ["metal"] }
-llama-cpp-2 = { version = "0.1.154", default-features = false, features = ["metal"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 wasapi = "0.23"
