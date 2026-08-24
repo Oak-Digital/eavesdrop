@@ -240,9 +240,11 @@ h1, h2, h3 { letter-spacing: -0.018em; }
 .model-setting > div:first-child { display: grid; gap: 3px; }
 .model-setting strong { font-size: 13px; font-weight: 520; }
 .model-setting p { margin: 0; color: var(--text-secondary); font-size: 11px; line-height: 1.4; }
-.model-install-controls { display: flex; align-items: center; gap: 8px; }
+.model-install-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .model-install-controls select { min-width: 250px; height: 32px; padding: 0 9px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg-base); color: var(--text-primary); font-size: 12px; }
 .model-install-controls .button { margin: 0; white-space: nowrap; }
+.model-install-controls .model-delete { border-color: color-mix(in srgb, var(--danger) 45%, var(--border-subtle)); background: transparent; color: var(--danger); }
+.model-install-controls .model-delete:hover:not(:disabled) { background: var(--danger-soft); }
 .model-description { color: var(--text-tertiary) !important; }
 
 .quick-panel { width: 360px; min-height: 100vh; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border-strong); background: var(--bg-base); box-shadow: var(--shadow-popover); }

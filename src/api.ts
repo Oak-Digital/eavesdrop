@@ -261,6 +261,15 @@ export async function installSummaryModel(modelId: string): Promise<AppSnapshot>
   return structuredClone(browserSnapshot);
 }
 
+export async function removeSummaryModel(modelId: string): Promise<AppSnapshot> {
+  if (isTauri()) return command<AppSnapshot>("remove_summary_model", { modelId });
+  browserInstalledSummaryModels.delete(modelId);
+  if (browserSnapshot.settings.summaryModelPath === `/models/${modelId}.gguf`) {
+    browserSnapshot.settings.summaryModelPath = null;
+  }
+  return structuredClone(browserSnapshot);
+}
+
 export async function onSummarizationProgress(handler: (progress: SummarizationProgress) => void): Promise<UnlistenFn> {
   if (!isTauri()) return () => undefined;
   return listen<SummarizationProgress>("summarization-progress", (event) => handler(event.payload));
@@ -285,6 +294,15 @@ export async function installWhisperModel(modelId: string): Promise<AppSnapshot>
   if (isTauri()) return command<AppSnapshot>("install_whisper_model", { modelId });
   browserInstalledWhisperModels.add(modelId);
   browserSnapshot.settings.whisperModelPath = `/models/ggml-${modelId}.bin`;
+  return structuredClone(browserSnapshot);
+}
+
+export async function removeWhisperModel(modelId: string): Promise<AppSnapshot> {
+  if (isTauri()) return command<AppSnapshot>("remove_whisper_model", { modelId });
+  browserInstalledWhisperModels.delete(modelId);
+  if (browserSnapshot.settings.whisperModelPath === `/models/ggml-${modelId}.bin`) {
+    browserSnapshot.settings.whisperModelPath = null;
+  }
   return structuredClone(browserSnapshot);
 }
 

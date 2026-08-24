@@ -8,6 +8,7 @@ import {
   listRecordings,
   listWhisperModels,
   resetBrowserMock,
+  removeWhisperModel,
   restoreRecordings,
   startRecording,
   stopRecording,
@@ -42,5 +43,14 @@ describe("Whisper model installation", () => {
 
     expect((await listWhisperModels()).find((model) => model.id === "base")?.installed).toBe(true);
     expect((await getSnapshot()).settings.whisperModelPath).toBe("/models/ggml-base.bin");
+  });
+
+  it("removes an installed model and clears it when selected", async () => {
+    await installWhisperModel("base");
+
+    await removeWhisperModel("base");
+
+    expect((await listWhisperModels()).find((model) => model.id === "base")?.installed).toBe(false);
+    expect((await getSnapshot()).settings.whisperModelPath).toBeNull();
   });
 });

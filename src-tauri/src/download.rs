@@ -6,7 +6,7 @@
 //! differ between them, so the transfer itself lives here.
 
 use std::{
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
     time::Duration,
@@ -64,29 +64,39 @@ pub fn install(
         on_progress(size_bytes, size_bytes);
         return Ok(destination.to_path_buf());
     }
-    if fs2::available_space(directory).unwrap_or(u64::MAX) < size_bytes + SPARE_BYTES {
+    let pending = destination.with_extension("part");
+    let pending_bytes = pending
+        .metadata()
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    let resumable_bytes = if pending_bytes <= size_bytes {
+        pending_bytes
+    } else {
+        fs::remove_file(&pending)?;
+        0
+    };
+    let remaining_bytes = size_bytes - resumable_bytes;
+    if fs2::available_space(directory).unwrap_or(u64::MAX) < remaining_bytes + SPARE_BYTES {
         return Err(AppError::Storage(format!(
             "not enough free space to install this {what}"
         )));
     }
 
-    let pending = destination.with_extension("part");
-    let result = download(url, &pending, size_bytes, what, &mut on_progress).and_then(|()| {
-        if !checksum.matches(&pending)? {
-            return Err(AppError::Other(format!(
-                "the downloaded {what} failed its integrity check"
-            )));
-        }
-        if destination.exists() {
-            fs::remove_file(destination)?;
-        }
-        fs::rename(&pending, destination)?;
-        Ok(destination.to_path_buf())
-    });
-    if result.is_err() {
+    // A partial file belongs to the app data directory, not to the settings
+    // screen that started it. Keep it after a stopped transfer so a retry can
+    // continue instead of throwing away gigabytes already on disk.
+    download(url, &pending, size_bytes, what, &mut on_progress)?;
+    if !checksum.matches(&pending)? {
         let _ = fs::remove_file(pending);
+        return Err(AppError::Other(format!(
+            "the downloaded {what} failed its integrity check"
+        )));
     }
-    result
+    if destination.exists() {
+        fs::remove_file(destination)?;
+    }
+    fs::rename(&pending, destination)?;
+    Ok(destination.to_path_buf())
 }
 
 fn download(
@@ -101,18 +111,42 @@ fn download(
         .user_agent("Eavesdrop model installer")
         .build()
         .map_err(|error| AppError::Other(format!("could not start the download: {error}")))?;
-    let mut response = client
-        .get(url)
+    let mut downloaded_bytes = path.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+    if downloaded_bytes > size_hint {
+        fs::remove_file(path)?;
+        downloaded_bytes = 0;
+    }
+    if downloaded_bytes == size_hint {
+        on_progress(downloaded_bytes, size_hint);
+        return Ok(());
+    }
+
+    let mut request = client.get(url);
+    if downloaded_bytes > 0 {
+        request = request.header(reqwest::header::RANGE, format!("bytes={downloaded_bytes}-"));
+    }
+    let mut response = request
         .send()
         .and_then(reqwest::blocking::Response::error_for_status)
         .map_err(|error| AppError::Other(format!("could not download the {what}: {error}")))?;
-    let expected_bytes = response.content_length();
+    let resumed = downloaded_bytes > 0 && response.status() == reqwest::StatusCode::PARTIAL_CONTENT;
+    if downloaded_bytes > 0 && !resumed {
+        // Some hosts ignore Range. Starting over is safe; appending their full
+        // response would create a file that can never pass verification.
+        downloaded_bytes = 0;
+    }
+    let response_bytes = response.content_length();
+    let expected_bytes = response_bytes.map(|bytes| bytes + downloaded_bytes);
     let total_bytes = expected_bytes.unwrap_or(size_hint);
-    let mut file = File::create(path)?;
-    let mut downloaded_bytes = 0u64;
-    let mut last_reported_bytes = 0u64;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(resumed)
+        .truncate(!resumed)
+        .open(path)?;
+    let mut last_reported_bytes = downloaded_bytes;
     let mut buffer = [0u8; 64 * 1024];
-    on_progress(0, total_bytes);
+    on_progress(downloaded_bytes, total_bytes);
     loop {
         let count = response
             .read(&mut buffer)
@@ -202,5 +236,61 @@ mod tests {
 
         assert_eq!(installed, path);
         assert_eq!(reported, vec![(3, 3)]);
+    }
+
+    #[test]
+    fn a_complete_pending_file_can_finish_without_fetching_again() {
+        let temp = tempfile::tempdir().unwrap();
+        let destination = temp.path().join("model.bin");
+        fs::write(destination.with_extension("part"), b"abc").unwrap();
+
+        let installed = install(
+            "https://example.invalid/model.bin",
+            &destination,
+            3,
+            Checksum::Sha1("a9993e364706816aba3e25717850c26c9cd0d89d"),
+            "test model",
+            |_, _| {},
+        )
+        .unwrap();
+
+        assert_eq!(installed, destination);
+        assert_eq!(fs::read(installed).unwrap(), b"abc");
+    }
+
+    #[test]
+    fn a_partial_file_is_resumed_with_an_http_range_request() {
+        use std::net::TcpListener;
+
+        let server = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = server.local_addr().unwrap();
+        let responder = std::thread::spawn(move || {
+            let (mut stream, _) = server.accept().unwrap();
+            let mut request = [0u8; 1024];
+            let count = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..count]);
+            assert!(request.contains("range: bytes=1-") || request.contains("Range: bytes=1-"));
+            stream
+                .write_all(
+                    b"HTTP/1.1 206 Partial Content\r\nContent-Length: 2\r\nConnection: close\r\n\r\nbc",
+                )
+                .unwrap();
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let destination = temp.path().join("model.bin");
+        fs::write(destination.with_extension("part"), b"a").unwrap();
+
+        install(
+            &format!("http://{address}/model.bin"),
+            &destination,
+            3,
+            Checksum::Sha1("a9993e364706816aba3e25717850c26c9cd0d89d"),
+            "test model",
+            |_, _| {},
+        )
+        .unwrap();
+        responder.join().unwrap();
+
+        assert_eq!(fs::read(destination).unwrap(), b"abc");
     }
 }

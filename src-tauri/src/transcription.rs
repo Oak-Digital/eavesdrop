@@ -1,4 +1,5 @@
 use std::{
+    fs,
     io::Cursor,
     path::{Path, PathBuf},
 };
@@ -97,6 +98,25 @@ pub fn install_model(app: &AppHandle, models_dir: &Path, model_id: &str) -> AppR
         "Whisper model",
         |downloaded, total| emit_download_progress(app, model, downloaded, total),
     )
+}
+
+pub fn remove_model(models_dir: &Path, model_id: &str) -> AppResult<PathBuf> {
+    let model = MODELS
+        .iter()
+        .find(|model| model.id == model_id)
+        .ok_or_else(|| AppError::State("unknown Whisper model".into()))?;
+    let path = model_path(models_dir, model);
+    if !path.is_file() {
+        return Err(AppError::State(
+            "this Whisper model is not installed".into(),
+        ));
+    }
+    fs::remove_file(&path)?;
+    let pending = path.with_extension("part");
+    if pending.exists() {
+        let _ = fs::remove_file(pending);
+    }
+    Ok(path)
 }
 
 fn emit_transcription_progress(
@@ -320,7 +340,6 @@ fn resample(input: &[f32], source_rate: u32, target_rate: u32) -> Vec<f32> {
 mod tests {
     use super::*;
     use rusty_aac::{AacEncoder, AacEncoderConfig};
-
     #[test]
     fn resamples_recording_audio_to_whisper_rate() {
         let source = vec![0.25; 48_000];
@@ -394,5 +413,22 @@ mod tests {
                 model.id
             );
         }
+    }
+
+
+    #[test]
+    fn removing_a_model_updates_the_catalog() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("ggml-base.bin");
+        std::fs::write(&path, b"model").unwrap();
+
+        assert_eq!(remove_model(temp.path(), "base").unwrap(), path);
+        assert!(
+            !available_models(temp.path())
+                .into_iter()
+                .find(|model| model.id == "base")
+                .unwrap()
+                .installed
+        );
     }
 }

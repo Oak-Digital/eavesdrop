@@ -163,6 +163,14 @@ pub async fn install_summary_model(app: AppHandle, model_id: String) -> AppResul
 }
 
 #[tauri::command]
+pub fn remove_summary_model(
+    state: State<'_, AppState>,
+    model_id: String,
+) -> AppResult<AppSnapshot> {
+    state.remove_summary_model(&model_id)
+}
+
+#[tauri::command]
 pub fn list_whisper_models(state: State<'_, AppState>) -> Vec<WhisperModelInfo> {
     state.whisper_models()
 }
@@ -175,6 +183,14 @@ pub async fn install_whisper_model(app: AppHandle, model_id: String) -> AppResul
     })
     .await
     .map_err(|error| AppError::Other(format!("model installation task failed: {error}")))?
+}
+
+#[tauri::command]
+pub fn remove_whisper_model(
+    state: State<'_, AppState>,
+    model_id: String,
+) -> AppResult<AppSnapshot> {
+    state.remove_whisper_model(&model_id)
 }
 
 #[tauri::command]

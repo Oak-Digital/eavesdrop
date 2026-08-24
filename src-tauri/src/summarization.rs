@@ -12,6 +12,7 @@
 //! reaches nothing at all.
 
 use std::{
+    fs,
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -112,6 +113,25 @@ pub fn install_model(
         "summary model",
         on_progress,
     )
+}
+
+pub fn remove_model(models_dir: &Path, model_id: &str) -> AppResult<PathBuf> {
+    let model = MODELS
+        .iter()
+        .find(|model| model.id == model_id)
+        .ok_or_else(|| AppError::State("unknown summary model".into()))?;
+    let path = models_dir.join(model.file);
+    if !path.is_file() {
+        return Err(AppError::State(
+            "this summary model is not installed".into(),
+        ));
+    }
+    fs::remove_file(&path)?;
+    let pending = path.with_extension("part");
+    if pending.exists() {
+        let _ = fs::remove_file(pending);
+    }
+    Ok(path)
 }
 
 /// The engine binary sits next to the app binary: Tauri copies `externalBin`
@@ -224,7 +244,6 @@ pub fn summarize(
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn model_catalog_detects_downloaded_models() {
         let temp = tempfile::tempdir().unwrap();
@@ -252,6 +271,23 @@ mod tests {
                 .installed
         );
         assert!(MODELS.iter().all(|model| model.sha256.len() == 64));
+    }
+
+
+    #[test]
+    fn removing_a_model_updates_the_catalog() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("qwen2.5-1.5b-instruct-q4_k_m.gguf");
+        std::fs::write(&path, b"model").unwrap();
+
+        assert_eq!(remove_model(temp.path(), "qwen2.5-1.5b").unwrap(), path);
+        assert!(
+            !available_models(temp.path())
+                .into_iter()
+                .find(|model| model.id == "qwen2.5-1.5b")
+                .unwrap()
+                .installed
+        );
     }
 
     /// Pins the wire shape against `summarizer/src/wire.rs`. A field renamed on

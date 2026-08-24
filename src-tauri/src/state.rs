@@ -381,6 +381,24 @@ impl AppState {
         result
     }
 
+    pub fn remove_summary_model(&self, model_id: &str) -> AppResult<AppSnapshot> {
+        self.run_model_operation(|| {
+            let removed = crate::summarization::remove_model(&self.models_dir, model_id)?;
+            let settings = self.repository.settings()?;
+            if settings
+                .summary_model_path
+                .as_deref()
+                .is_some_and(|path| Path::new(path) == removed)
+            {
+                self.repository.update_settings(&SettingsPatch {
+                    summary_model_path: Some(None),
+                    ..Default::default()
+                })?;
+            }
+            self.snapshot(false)
+        })
+    }
+
     pub fn whisper_models(&self) -> Vec<WhisperModelInfo> {
         crate::transcription::available_models(&self.models_dir)
     }
@@ -407,6 +425,44 @@ impl AppState {
                 })?;
                 self.snapshot(false)
             });
+        if let Ok(mut active) = self.model_download_active.lock() {
+            *active = false;
+        }
+        result
+    }
+
+    pub fn remove_whisper_model(&self, model_id: &str) -> AppResult<AppSnapshot> {
+        self.run_model_operation(|| {
+            let removed = crate::transcription::remove_model(&self.models_dir, model_id)?;
+            let settings = self.repository.settings()?;
+            if settings
+                .whisper_model_path
+                .as_deref()
+                .is_some_and(|path| Path::new(path) == removed)
+            {
+                self.repository.update_settings(&SettingsPatch {
+                    whisper_model_path: Some(None),
+                    ..Default::default()
+                })?;
+            }
+            self.snapshot(false)
+        })
+    }
+
+    fn run_model_operation<T>(&self, operation: impl FnOnce() -> AppResult<T>) -> AppResult<T> {
+        {
+            let mut active = self
+                .model_download_active
+                .lock()
+                .map_err(|_| AppError::State("model download lock poisoned".into()))?;
+            if *active {
+                return Err(AppError::State(
+                    "another model download is already running".into(),
+                ));
+            }
+            *active = true;
+        }
+        let result = operation();
         if let Ok(mut active) = self.model_download_active.lock() {
             *active = false;
         }

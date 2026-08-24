@@ -17,7 +17,7 @@ import {
   StopIcon,
   TrashIcon,
 } from "./icons";
-import type { AppSnapshot, CaptureMode, Recording, SummarizationStage, SummaryModelInfo, TranscriptionStage, WhisperModelDownloadProgress, WhisperModelInfo } from "./types";
+import type { AppSnapshot, CaptureMode, Recording, SummarizationStage, SummaryModelInfo, TranscriptionStage, WhisperModelInfo } from "./types";
 import { useAppState } from "./useAppState";
 import { useUpdater } from "./useUpdater";
 
@@ -184,6 +184,7 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [activity, setActivity] = useState<ActivityState | null>(null);
+  const models = useModelManager(app);
 
   const reload = async () => {
     setLoading(true);
@@ -307,6 +308,7 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
           <button className={page === "deleted" ? "active" : ""} onClick={() => { setPage("deleted"); setSelected(null); }}><TrashIcon /> Recently deleted</button>
         </nav>
         <div className="sidebar-bottom">
+          {models.download && <ModelDownloadProgressCard models={models} />}
           {activity && <ActivityProgressCard activity={activity} />}
           <button className={page === "settings" ? "active" : ""} onClick={() => { setPage("settings"); setSelected(null); }}><SettingsIcon /> Settings</button>
           <div className="privacy-line">Audio stays on this computer</div>
@@ -341,7 +343,7 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
             onRemoved={async () => { setSelected(null); await reload(); }}
           />
         ) : page === "settings" ? (
-          <SettingsPage app={app} updater={updater} />
+          <SettingsPage app={app} updater={updater} models={models} />
         ) : (
           <>
             <header className="content-header">
@@ -379,6 +381,97 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
 
 // One long-running local job — a transcript or a summary — shown in the sidebar.
 type ActivityState = { recordingId: string; title: string; label: string; progress: number };
+
+type ModelDownloadState = {
+  kind: "whisper" | "summary";
+  modelId: string;
+  downloadedBytes: number;
+  totalBytes: number;
+};
+
+function useModelManager(app: AppController) {
+  const [whisperModels, setWhisperModels] = useState<WhisperModelInfo[]>([]);
+  const [summaryModels, setSummaryModels] = useState<SummaryModelInfo[]>([]);
+  const [download, setDownload] = useState<ModelDownloadState | null>(null);
+
+  const reload = async () => {
+    const [whisper, summary] = await Promise.all([api.listWhisperModels(), api.listSummaryModels()]);
+    setWhisperModels(whisper);
+    setSummaryModels(summary);
+  };
+
+  useEffect(() => {
+    let disposed = false;
+    const cleanups: Array<() => void> = [];
+    const keep = (cleanup: () => void) => { if (disposed) cleanup(); else cleanups.push(cleanup); };
+    void Promise.all([api.listWhisperModels(), api.listSummaryModels()]).then(([whisper, summary]) => {
+      if (!disposed) {
+        setWhisperModels(whisper);
+        setSummaryModels(summary);
+      }
+    });
+    void api.onWhisperModelDownloadProgress((progress) => {
+      if (!disposed) setDownload({ kind: "whisper", ...progress });
+    }).then(keep);
+    void api.onSummaryModelDownloadProgress((progress) => {
+      if (!disposed) setDownload({ kind: "summary", ...progress });
+    }).then(keep);
+    return () => { disposed = true; cleanups.forEach((cleanup) => cleanup()); };
+  }, []);
+
+  const finish = async (kind: ModelDownloadState["kind"], modelId: string) => {
+    try {
+      await reload();
+    } finally {
+      setDownload((current) => current?.kind === kind && current.modelId === modelId ? null : current);
+    }
+  };
+
+  return {
+    whisperModels,
+    summaryModels,
+    download,
+    installWhisper: async (modelId: string) => {
+      setDownload({ kind: "whisper", modelId, downloadedBytes: 0, totalBytes: 0 });
+      try { await app.installWhisperModel(modelId); } finally { await finish("whisper", modelId); }
+    },
+    installSummary: async (modelId: string) => {
+      setDownload({ kind: "summary", modelId, downloadedBytes: 0, totalBytes: 0 });
+      try { await app.installSummaryModel(modelId); } finally { await finish("summary", modelId); }
+    },
+    removeWhisper: async (modelId: string) => {
+      await app.removeWhisperModel(modelId);
+      await reload();
+    },
+    removeSummary: async (modelId: string) => {
+      await app.removeSummaryModel(modelId);
+      await reload();
+    },
+  };
+}
+
+type ModelManager = ReturnType<typeof useModelManager>;
+
+function ModelDownloadProgressCard({ models }: { models: ModelManager }) {
+  const download = models.download!;
+  const catalog = download.kind === "whisper" ? models.whisperModels : models.summaryModels;
+  const model = catalog.find((item) => item.id === download.modelId);
+  const percent = download.totalBytes
+    ? Math.min(100, Math.round(download.downloadedBytes / download.totalBytes * 100))
+    : 0;
+  return (
+    <div className="sidebar-progress" role="status" aria-live="polite">
+      <div className="sidebar-progress-head">
+        <span className="sidebar-progress-label">Downloading model</span>
+        <span className="sidebar-progress-value">{percent}%</span>
+      </div>
+      <div className="sidebar-progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
+        <div className="sidebar-progress-fill" style={{ width: `${percent}%` }} />
+      </div>
+      <div className="sidebar-progress-title" title={model?.name}>{model?.name ?? download.modelId}</div>
+    </div>
+  );
+}
 
 function transcriptionLabel(stage: TranscriptionStage) {
   return stage === "decoding" ? "Preparing audio" : "Transcribing";
@@ -631,16 +724,10 @@ function EncryptedAudioPlayer({ recording }: { recording: Recording }) {
   );
 }
 
-function SettingsPage({ app, updater }: { app: AppController; updater: AppUpdater }) {
+function SettingsPage({ app, updater, models }: { app: AppController; updater: AppUpdater; models: ModelManager }) {
   const snapshot = app.snapshot!;
-  const [whisperModels, setWhisperModels] = useState<WhisperModelInfo[]>([]);
   const [selectedWhisperModel, setSelectedWhisperModel] = useState("base");
-  const [modelProgress, setModelProgress] = useState<WhisperModelDownloadProgress | null>(null);
-  const [installingModel, setInstallingModel] = useState(false);
-  const [summaryModels, setSummaryModels] = useState<SummaryModelInfo[]>([]);
   const [selectedSummaryModel, setSelectedSummaryModel] = useState("qwen2.5-1.5b");
-  const [summaryModelProgress, setSummaryModelProgress] = useState<WhisperModelDownloadProgress | null>(null);
-  const [installingSummaryModel, setInstallingSummaryModel] = useState(false);
   const recordingActive = ["starting", "recording", "paused", "finalizing"].includes(snapshot.session.phase);
   const update = updater.state;
   const updateDescription = update.phase === "available"
@@ -652,27 +739,16 @@ function SettingsPage({ app, updater }: { app: AppController; updater: AppUpdate
         : update.phase === "error"
           ? update.error ?? "The update check failed."
           : "Eavesdrop checks for signed updates when it starts.";
-  useEffect(() => {
-    let disposed = false;
-    const cleanups: Array<() => void> = [];
-    const keep = (cleanup: () => void) => { if (disposed) cleanup(); else cleanups.push(cleanup); };
-    void api.listWhisperModels().then((models) => { if (!disposed) setWhisperModels(models); });
-    void api.listSummaryModels().then((models) => { if (!disposed) setSummaryModels(models); });
-    void api.onWhisperModelDownloadProgress((progress) => {
-      if (!disposed) setModelProgress(progress);
-    }).then(keep);
-    void api.onSummaryModelDownloadProgress((progress) => {
-      if (!disposed) setSummaryModelProgress(progress);
-    }).then(keep);
-    return () => { disposed = true; cleanups.forEach((cleanup) => cleanup()); };
-  }, []);
-  const selectedModel = whisperModels.find((model) => model.id === selectedWhisperModel);
-  const selectedSummary = summaryModels.find((model) => model.id === selectedSummaryModel);
-  const percentageOf = (progress: WhisperModelDownloadProgress | null) => progress?.totalBytes
+  const selectedModel = models.whisperModels.find((model) => model.id === selectedWhisperModel);
+  const selectedSummary = models.summaryModels.find((model) => model.id === selectedSummaryModel);
+  const percentageOf = (progress: ModelDownloadState | null) => progress?.totalBytes
     ? Math.min(100, Math.round(progress.downloadedBytes / progress.totalBytes * 100))
     : 0;
-  const modelPercentage = percentageOf(modelProgress);
-  const summaryModelPercentage = percentageOf(summaryModelProgress);
+  const installingModel = models.download?.kind === "whisper";
+  const installingSummaryModel = models.download?.kind === "summary";
+  const modelPercentage = percentageOf(installingModel ? models.download : null);
+  const summaryModelPercentage = percentageOf(installingSummaryModel ? models.download : null);
+  const modelBusy = models.download !== null;
   return (
     <div className="settings-page">
       <header className="content-header"><div><h1>Settings</h1><p>Recording sources and app behavior.</p></div></header>
@@ -687,19 +763,13 @@ function SettingsPage({ app, updater }: { app: AppController; updater: AppUpdate
           <div><strong>Open-source Whisper</strong><p>{snapshot.settings.whisperModelPath ? `Using ${modelFileName(snapshot.settings.whisperModelPath)}` : "Install a model once, then transcribe without sending audio anywhere."}</p></div>
           <div className="model-install-controls">
             <select value={selectedWhisperModel} onChange={(event) => setSelectedWhisperModel(event.target.value)} aria-label="Whisper model">
-              {whisperModels.map((model) => <option key={model.id} value={model.id}>{model.name} · {formatSize(model.sizeBytes)}{model.installed ? " · Installed" : ""}</option>)}
+              {models.whisperModels.map((model) => <option key={model.id} value={model.id}>{model.name} · {formatSize(model.sizeBytes)}{model.installed ? " · Installed" : ""}</option>)}
             </select>
-            <button className="button primary" disabled={!selectedModel || installingModel} onClick={async () => {
-              setInstallingModel(true);
-              setModelProgress(null);
-              try {
-                await app.installWhisperModel(selectedWhisperModel);
-                setWhisperModels(await api.listWhisperModels());
-              } finally {
-                setInstallingModel(false);
-              }
-            }}>{installingModel ? `${modelPercentage}%` : selectedModel?.installed ? "Use model" : "Install"}</button>
-            <button className="button secondary" disabled={installingModel} onClick={async () => {
+            <button className="button primary" disabled={!selectedModel || modelBusy} onClick={() => models.installWhisper(selectedWhisperModel)}>{installingModel ? `${modelPercentage}%` : selectedModel?.installed ? "Use model" : "Install"}</button>
+            {selectedModel?.installed && <button className="button model-delete" disabled={modelBusy} onClick={() => {
+              if (window.confirm(`Delete ${selectedModel.name} from this device?`)) void models.removeWhisper(selectedWhisperModel);
+            }}>Delete</button>}
+            <button className="button secondary" disabled={modelBusy} onClick={async () => {
               const path = await api.selectWhisperModel();
               if (path) await app.updateSettings({ whisperModelPath: path });
             }}>Choose existing…</button>
@@ -714,19 +784,13 @@ function SettingsPage({ app, updater }: { app: AppController; updater: AppUpdate
           <div><strong>Open-weight language model</strong><p>{snapshot.settings.summaryModelPath ? `Using ${modelFileName(snapshot.settings.summaryModelPath)}` : "Summaries and suggested titles are written on this computer, from the transcript."}</p></div>
           <div className="model-install-controls">
             <select value={selectedSummaryModel} onChange={(event) => setSelectedSummaryModel(event.target.value)} aria-label="Summary model">
-              {summaryModels.map((model) => <option key={model.id} value={model.id}>{model.name} · {formatSize(model.sizeBytes)}{model.installed ? " · Installed" : ""}</option>)}
+              {models.summaryModels.map((model) => <option key={model.id} value={model.id}>{model.name} · {formatSize(model.sizeBytes)}{model.installed ? " · Installed" : ""}</option>)}
             </select>
-            <button className="button primary" disabled={!selectedSummary || installingSummaryModel} onClick={async () => {
-              setInstallingSummaryModel(true);
-              setSummaryModelProgress(null);
-              try {
-                await app.installSummaryModel(selectedSummaryModel);
-                setSummaryModels(await api.listSummaryModels());
-              } finally {
-                setInstallingSummaryModel(false);
-              }
-            }}>{installingSummaryModel ? `${summaryModelPercentage}%` : selectedSummary?.installed ? "Use model" : "Install"}</button>
-            <button className="button secondary" disabled={installingSummaryModel} onClick={async () => {
+            <button className="button primary" disabled={!selectedSummary || modelBusy} onClick={() => models.installSummary(selectedSummaryModel)}>{installingSummaryModel ? `${summaryModelPercentage}%` : selectedSummary?.installed ? "Use model" : "Install"}</button>
+            {selectedSummary?.installed && <button className="button model-delete" disabled={modelBusy} onClick={() => {
+              if (window.confirm(`Delete ${selectedSummary.name} from this device?`)) void models.removeSummary(selectedSummaryModel);
+            }}>Delete</button>}
+            <button className="button secondary" disabled={modelBusy} onClick={async () => {
               const path = await api.selectSummaryModel();
               if (path) await app.updateSettings({ summaryModelPath: path });
             }}>Choose existing…</button>
