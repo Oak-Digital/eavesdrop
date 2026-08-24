@@ -20,8 +20,7 @@ use crate::{
     download::{self, Checksum},
     error::{AppError, AppResult},
     models::{
-        Transcript, TranscriptSegment, TranscriptionProgress, TranscriptionStage,
-        WhisperModelDownloadProgress, WhisperModelInfo,
+        Transcript, TranscriptSegment, TranscriptionProgress, TranscriptionStage, WhisperModelInfo,
     },
 };
 
@@ -85,7 +84,11 @@ pub fn available_models(models_dir: &Path) -> Vec<WhisperModelInfo> {
         .collect()
 }
 
-pub fn install_model(app: &AppHandle, models_dir: &Path, model_id: &str) -> AppResult<PathBuf> {
+pub fn install_model(
+    models_dir: &Path,
+    model_id: &str,
+    on_progress: impl FnMut(u64, u64),
+) -> AppResult<PathBuf> {
     let model = MODELS
         .iter()
         .find(|model| model.id == model_id)
@@ -96,8 +99,22 @@ pub fn install_model(app: &AppHandle, models_dir: &Path, model_id: &str) -> AppR
         model.size_bytes,
         model.checksum,
         "Whisper model",
-        |downloaded, total| emit_download_progress(app, model, downloaded, total),
+        on_progress,
     )
+}
+
+pub fn installed_model_path(models_dir: &Path, model_id: &str) -> AppResult<PathBuf> {
+    let model = MODELS
+        .iter()
+        .find(|model| model.id == model_id)
+        .ok_or_else(|| AppError::State("unknown Whisper model".into()))?;
+    let path = model_path(models_dir, model);
+    if !path.is_file() || !model.checksum.matches(&path)? {
+        return Err(AppError::State(
+            "this Whisper model is not installed correctly".into(),
+        ));
+    }
+    Ok(path)
 }
 
 pub fn remove_model(models_dir: &Path, model_id: &str) -> AppResult<PathBuf> {
@@ -131,17 +148,6 @@ fn emit_transcription_progress(
             recording_id: recording_id.to_string(),
             stage,
             progress: progress.clamp(0.0, 1.0),
-        },
-    );
-}
-
-fn emit_download_progress(app: &AppHandle, model: &ModelSpec, downloaded: u64, total: u64) {
-    let _ = app.emit(
-        "whisper-model-download-progress",
-        WhisperModelDownloadProgress {
-            model_id: model.id.into(),
-            downloaded_bytes: downloaded,
-            total_bytes: total,
         },
     );
 }

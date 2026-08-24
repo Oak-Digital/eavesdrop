@@ -6,6 +6,7 @@ import type {
   AppSnapshot,
   AudioLevels,
   MeetingCandidate,
+  ModelDownloadStatus,
   Recording,
   RecordingSession,
   StartRecordingInput,
@@ -261,6 +262,13 @@ export async function installSummaryModel(modelId: string): Promise<AppSnapshot>
   return structuredClone(browserSnapshot);
 }
 
+export async function useSummaryModel(modelId: string): Promise<AppSnapshot> {
+  if (isTauri()) return command<AppSnapshot>("use_summary_model", { modelId });
+  if (!browserInstalledSummaryModels.has(modelId)) throw new Error("This summary model is not installed");
+  browserSnapshot.settings.summaryModelPath = `/models/${modelId}.gguf`;
+  return structuredClone(browserSnapshot);
+}
+
 export async function removeSummaryModel(modelId: string): Promise<AppSnapshot> {
   if (isTauri()) return command<AppSnapshot>("remove_summary_model", { modelId });
   browserInstalledSummaryModels.delete(modelId);
@@ -297,6 +305,13 @@ export async function installWhisperModel(modelId: string): Promise<AppSnapshot>
   return structuredClone(browserSnapshot);
 }
 
+export async function useWhisperModel(modelId: string): Promise<AppSnapshot> {
+  if (isTauri()) return command<AppSnapshot>("use_whisper_model", { modelId });
+  if (!browserInstalledWhisperModels.has(modelId)) throw new Error("This Whisper model is not installed");
+  browserSnapshot.settings.whisperModelPath = `/models/ggml-${modelId}.bin`;
+  return structuredClone(browserSnapshot);
+}
+
 export async function removeWhisperModel(modelId: string): Promise<AppSnapshot> {
   if (isTauri()) return command<AppSnapshot>("remove_whisper_model", { modelId });
   browserInstalledWhisperModels.delete(modelId);
@@ -314,6 +329,16 @@ export async function onTranscriptionProgress(handler: (progress: TranscriptionP
 export async function onWhisperModelDownloadProgress(handler: (progress: WhisperModelDownloadProgress) => void): Promise<UnlistenFn> {
   if (!isTauri()) return () => undefined;
   return listen<WhisperModelDownloadProgress>("whisper-model-download-progress", (event) => handler(event.payload));
+}
+
+export async function getModelDownloadStatus(): Promise<ModelDownloadStatus | null> {
+  if (!isTauri()) return null;
+  return command<ModelDownloadStatus | null>("get_model_download_status");
+}
+
+export async function onModelDownloadStatus(handler: (status: ModelDownloadStatus) => void): Promise<UnlistenFn> {
+  if (!isTauri()) return () => undefined;
+  return listen<ModelDownloadStatus>("model-download-status", (event) => handler(event.payload));
 }
 
 export async function dismissMeeting(id: string): Promise<void> {

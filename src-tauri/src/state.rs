@@ -12,8 +12,8 @@ use crate::{
     crypto::{RecordingKey, Vault},
     error::{AppError, AppResult},
     models::{
-        AppSnapshot, CaptureMode, Recording, RecordingPhase, RecordingSession, SettingsPatch,
-        StartRecordingInput, SummarizationProgress, SummarizationStage, Summary,
+        AppSnapshot, CaptureMode, ModelDownloadStatus, Recording, RecordingPhase, RecordingSession,
+        SettingsPatch, StartRecordingInput, SummarizationProgress, SummarizationStage, Summary,
         SummaryModelDownloadProgress, SummaryModelInfo, Transcript, WhisperModelInfo,
     },
     platform,
@@ -26,6 +26,7 @@ pub struct AppState {
     models_dir: PathBuf,
     runtime: Mutex<RuntimeState>,
     model_download_active: Mutex<bool>,
+    model_download_status: Mutex<Option<ModelDownloadStatus>>,
     /// A loaded summary model can hold gigabytes, so only one run at a time.
     summarization_active: Mutex<bool>,
 }
@@ -68,6 +69,7 @@ impl AppState {
                 update_installing: false,
             }),
             model_download_active: Mutex::new(false),
+            model_download_status: Mutex::new(None),
             summarization_active: Mutex::new(false),
         };
         state.recover_unfinished()?;
@@ -340,6 +342,13 @@ impl AppState {
         crate::summarization::available_models(&self.models_dir)
     }
 
+    pub fn model_download_status(&self) -> Option<ModelDownloadStatus> {
+        self.model_download_status
+            .lock()
+            .ok()
+            .and_then(|status| status.clone())
+    }
+
     pub fn install_summary_model(&self, app: &AppHandle, model_id: &str) -> AppResult<AppSnapshot> {
         {
             let mut active = self
@@ -353,11 +362,13 @@ impl AppState {
             }
             *active = true;
         }
+        self.start_model_download(app, "summary", model_id);
 
         let result = crate::summarization::install_model(
             &self.models_dir,
             model_id,
             |downloaded, total| {
+                self.advance_model_download(app, "summary", model_id, downloaded, total);
                 let _ = app.emit(
                     "summary-model-download-progress",
                     SummaryModelDownloadProgress {
@@ -378,7 +389,17 @@ impl AppState {
         if let Ok(mut active) = self.model_download_active.lock() {
             *active = false;
         }
+        self.finish_model_download(app, "summary", model_id, result.is_ok());
         result
+    }
+
+    pub fn use_summary_model(&self, model_id: &str) -> AppResult<AppSnapshot> {
+        let path = crate::summarization::installed_model_path(&self.models_dir, model_id)?;
+        self.repository.update_settings(&SettingsPatch {
+            summary_model_path: Some(Some(path.to_string_lossy().into_owned())),
+            ..Default::default()
+        })?;
+        self.snapshot(false)
     }
 
     pub fn remove_summary_model(&self, model_id: &str) -> AppResult<AppSnapshot> {
@@ -416,19 +437,44 @@ impl AppState {
             }
             *active = true;
         }
+        self.start_model_download(app, "whisper", model_id);
 
-        let result =
-            crate::transcription::install_model(app, &self.models_dir, model_id).and_then(|path| {
+        let result = crate::transcription::install_model(
+            &self.models_dir,
+            model_id,
+            |downloaded, total| {
+                self.advance_model_download(app, "whisper", model_id, downloaded, total);
+                let _ = app.emit(
+                    "whisper-model-download-progress",
+                    crate::models::WhisperModelDownloadProgress {
+                        model_id: model_id.into(),
+                        downloaded_bytes: downloaded,
+                        total_bytes: total,
+                    },
+                );
+            },
+        )
+        .and_then(|path| {
                 self.repository.update_settings(&SettingsPatch {
                     whisper_model_path: Some(Some(path.to_string_lossy().into_owned())),
                     ..Default::default()
                 })?;
                 self.snapshot(false)
-            });
+        });
         if let Ok(mut active) = self.model_download_active.lock() {
             *active = false;
         }
+        self.finish_model_download(app, "whisper", model_id, result.is_ok());
         result
+    }
+
+    pub fn use_whisper_model(&self, model_id: &str) -> AppResult<AppSnapshot> {
+        let path = crate::transcription::installed_model_path(&self.models_dir, model_id)?;
+        self.repository.update_settings(&SettingsPatch {
+            whisper_model_path: Some(Some(path.to_string_lossy().into_owned())),
+            ..Default::default()
+        })?;
+        self.snapshot(false)
     }
 
     pub fn remove_whisper_model(&self, model_id: &str) -> AppResult<AppSnapshot> {
@@ -467,6 +513,70 @@ impl AppState {
             *active = false;
         }
         result
+    }
+
+    fn start_model_download(&self, app: &AppHandle, kind: &str, model_id: &str) {
+        self.set_model_download_status(
+            app,
+            ModelDownloadStatus {
+                kind: kind.into(),
+                model_id: model_id.into(),
+                downloaded_bytes: 0,
+                total_bytes: 0,
+                active: true,
+            },
+        );
+    }
+
+    fn advance_model_download(
+        &self,
+        app: &AppHandle,
+        kind: &str,
+        model_id: &str,
+        downloaded_bytes: u64,
+        total_bytes: u64,
+    ) {
+        self.set_model_download_status(
+            app,
+            ModelDownloadStatus {
+                kind: kind.into(),
+                model_id: model_id.into(),
+                downloaded_bytes,
+                total_bytes,
+                active: true,
+            },
+        );
+    }
+
+    fn finish_model_download(
+        &self,
+        app: &AppHandle,
+        kind: &str,
+        model_id: &str,
+        succeeded: bool,
+    ) {
+        let mut status = self.model_download_status().unwrap_or(ModelDownloadStatus {
+            kind: kind.into(),
+            model_id: model_id.into(),
+            downloaded_bytes: 0,
+            total_bytes: 0,
+            active: false,
+        });
+        status.active = false;
+        if succeeded && status.total_bytes > 0 {
+            status.downloaded_bytes = status.total_bytes;
+        }
+        if let Ok(mut current) = self.model_download_status.lock() {
+            *current = None;
+        }
+        let _ = app.emit("model-download-status", status);
+    }
+
+    fn set_model_download_status(&self, app: &AppHandle, status: ModelDownloadStatus) {
+        if let Ok(mut current) = self.model_download_status.lock() {
+            *current = Some(status.clone());
+        }
+        let _ = app.emit("model-download-status", status);
     }
 
     pub fn update_settings(&self, patch: &SettingsPatch) -> AppResult<crate::models::AppSettings> {

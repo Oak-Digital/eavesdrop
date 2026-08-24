@@ -12,6 +12,7 @@ import {
   restoreRecordings,
   startRecording,
   stopRecording,
+  useWhisperModel,
 } from "./api";
 
 describe("bulk recording actions", () => {
@@ -52,5 +53,14 @@ describe("Whisper model installation", () => {
 
     expect((await listWhisperModels()).find((model) => model.id === "base")?.installed).toBe(false);
     expect((await getSnapshot()).settings.whisperModelPath).toBeNull();
+  });
+
+  it("selects an already-installed model without installing it again", async () => {
+    await installWhisperModel("base");
+    await installWhisperModel("tiny");
+
+    await useWhisperModel("base");
+
+    expect((await getSnapshot()).settings.whisperModelPath).toBe("/models/ggml-base.bin");
   });
 });

@@ -79,6 +79,14 @@ export interface WhisperModelDownloadProgress {
   totalBytes: number;
 }
 
+export interface ModelDownloadStatus {
+  kind: "whisper" | "summary";
+  modelId: string;
+  downloadedBytes: number;
+  totalBytes: number;
+  active: boolean;
+}
+
 export type TranscriptionStage = "decoding" | "transcribing";
 
 export interface TranscriptionProgress {

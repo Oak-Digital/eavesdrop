@@ -17,7 +17,7 @@ import {
   StopIcon,
   TrashIcon,
 } from "./icons";
-import type { AppSnapshot, CaptureMode, Recording, SummarizationStage, SummaryModelInfo, TranscriptionStage, WhisperModelInfo } from "./types";
+import type { AppSnapshot, CaptureMode, ModelDownloadStatus, Recording, SummarizationStage, SummaryModelInfo, TranscriptionStage, WhisperModelInfo } from "./types";
 import { useAppState } from "./useAppState";
 import { useUpdater } from "./useUpdater";
 
@@ -382,17 +382,10 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
 // One long-running local job — a transcript or a summary — shown in the sidebar.
 type ActivityState = { recordingId: string; title: string; label: string; progress: number };
 
-type ModelDownloadState = {
-  kind: "whisper" | "summary";
-  modelId: string;
-  downloadedBytes: number;
-  totalBytes: number;
-};
-
 function useModelManager(app: AppController) {
   const [whisperModels, setWhisperModels] = useState<WhisperModelInfo[]>([]);
   const [summaryModels, setSummaryModels] = useState<SummaryModelInfo[]>([]);
-  const [download, setDownload] = useState<ModelDownloadState | null>(null);
+  const [download, setDownload] = useState<ModelDownloadStatus | null>(null);
 
   const reload = async () => {
     const [whisper, summary] = await Promise.all([api.listWhisperModels(), api.listSummaryModels()]);
@@ -404,26 +397,31 @@ function useModelManager(app: AppController) {
     let disposed = false;
     const cleanups: Array<() => void> = [];
     const keep = (cleanup: () => void) => { if (disposed) cleanup(); else cleanups.push(cleanup); };
-    void Promise.all([api.listWhisperModels(), api.listSummaryModels()]).then(([whisper, summary]) => {
+    void api.onModelDownloadStatus((status) => {
+      if (disposed) return;
+      if (status.active) {
+        setDownload(status);
+      } else {
+        setDownload(null);
+        void reload();
+      }
+    }).then(keep);
+    void Promise.all([api.listWhisperModels(), api.listSummaryModels(), api.getModelDownloadStatus()]).then(([whisper, summary, status]) => {
       if (!disposed) {
         setWhisperModels(whisper);
         setSummaryModels(summary);
+        if (status?.active) setDownload(status);
       }
     });
-    void api.onWhisperModelDownloadProgress((progress) => {
-      if (!disposed) setDownload({ kind: "whisper", ...progress });
-    }).then(keep);
-    void api.onSummaryModelDownloadProgress((progress) => {
-      if (!disposed) setDownload({ kind: "summary", ...progress });
-    }).then(keep);
     return () => { disposed = true; cleanups.forEach((cleanup) => cleanup()); };
   }, []);
 
-  const finish = async (kind: ModelDownloadState["kind"], modelId: string) => {
+  const reconcile = async () => {
     try {
       await reload();
     } finally {
-      setDownload((current) => current?.kind === kind && current.modelId === modelId ? null : current);
+      const status = await api.getModelDownloadStatus().catch(() => null);
+      setDownload(status?.active ? status : null);
     }
   };
 
@@ -432,12 +430,20 @@ function useModelManager(app: AppController) {
     summaryModels,
     download,
     installWhisper: async (modelId: string) => {
-      setDownload({ kind: "whisper", modelId, downloadedBytes: 0, totalBytes: 0 });
-      try { await app.installWhisperModel(modelId); } finally { await finish("whisper", modelId); }
+      setDownload({ kind: "whisper", modelId, downloadedBytes: 0, totalBytes: 0, active: true });
+      try { await app.installWhisperModel(modelId); } finally { await reconcile(); }
     },
     installSummary: async (modelId: string) => {
-      setDownload({ kind: "summary", modelId, downloadedBytes: 0, totalBytes: 0 });
-      try { await app.installSummaryModel(modelId); } finally { await finish("summary", modelId); }
+      setDownload({ kind: "summary", modelId, downloadedBytes: 0, totalBytes: 0, active: true });
+      try { await app.installSummaryModel(modelId); } finally { await reconcile(); }
+    },
+    useWhisper: async (modelId: string) => {
+      await app.useWhisperModel(modelId);
+      await reload();
+    },
+    useSummary: async (modelId: string) => {
+      await app.useSummaryModel(modelId);
+      await reload();
     },
     removeWhisper: async (modelId: string) => {
       await app.removeWhisperModel(modelId);
@@ -739,9 +745,17 @@ function SettingsPage({ app, updater, models }: { app: AppController; updater: A
         : update.phase === "error"
           ? update.error ?? "The update check failed."
           : "Eavesdrop checks for signed updates when it starts.";
+  useEffect(() => {
+    const active = models.whisperModels.find((model) => modelPathContainsId(snapshot.settings.whisperModelPath, model.id));
+    if (active) setSelectedWhisperModel(active.id);
+  }, [models.whisperModels, snapshot.settings.whisperModelPath]);
+  useEffect(() => {
+    const active = models.summaryModels.find((model) => modelPathContainsId(snapshot.settings.summaryModelPath, model.id));
+    if (active) setSelectedSummaryModel(active.id);
+  }, [models.summaryModels, snapshot.settings.summaryModelPath]);
   const selectedModel = models.whisperModels.find((model) => model.id === selectedWhisperModel);
   const selectedSummary = models.summaryModels.find((model) => model.id === selectedSummaryModel);
-  const percentageOf = (progress: ModelDownloadState | null) => progress?.totalBytes
+  const percentageOf = (progress: ModelDownloadStatus | null) => progress?.totalBytes
     ? Math.min(100, Math.round(progress.downloadedBytes / progress.totalBytes * 100))
     : 0;
   const installingModel = models.download?.kind === "whisper";
@@ -749,6 +763,8 @@ function SettingsPage({ app, updater, models }: { app: AppController; updater: A
   const modelPercentage = percentageOf(installingModel ? models.download : null);
   const summaryModelPercentage = percentageOf(installingSummaryModel ? models.download : null);
   const modelBusy = models.download !== null;
+  const whisperInUse = selectedModel ? modelPathContainsId(snapshot.settings.whisperModelPath, selectedModel.id) : false;
+  const summaryInUse = selectedSummary ? modelPathContainsId(snapshot.settings.summaryModelPath, selectedSummary.id) : false;
   return (
     <div className="settings-page">
       <header className="content-header"><div><h1>Settings</h1><p>Recording sources and app behavior.</p></div></header>
@@ -765,7 +781,7 @@ function SettingsPage({ app, updater, models }: { app: AppController; updater: A
             <select value={selectedWhisperModel} onChange={(event) => setSelectedWhisperModel(event.target.value)} aria-label="Whisper model">
               {models.whisperModels.map((model) => <option key={model.id} value={model.id}>{model.name} · {formatSize(model.sizeBytes)}{model.installed ? " · Installed" : ""}</option>)}
             </select>
-            <button className="button primary" disabled={!selectedModel || modelBusy} onClick={() => models.installWhisper(selectedWhisperModel)}>{installingModel ? `${modelPercentage}%` : selectedModel?.installed ? "Use model" : "Install"}</button>
+            <button className="button primary" disabled={!selectedModel || modelBusy || whisperInUse} onClick={() => selectedModel?.installed ? models.useWhisper(selectedWhisperModel) : models.installWhisper(selectedWhisperModel)}>{installingModel ? `${modelPercentage}%` : whisperInUse ? "In use" : selectedModel?.installed ? "Use model" : "Install"}</button>
             {selectedModel?.installed && <button className="button model-delete" disabled={modelBusy} onClick={() => {
               if (window.confirm(`Delete ${selectedModel.name} from this device?`)) void models.removeWhisper(selectedWhisperModel);
             }}>Delete</button>}
@@ -786,7 +802,7 @@ function SettingsPage({ app, updater, models }: { app: AppController; updater: A
             <select value={selectedSummaryModel} onChange={(event) => setSelectedSummaryModel(event.target.value)} aria-label="Summary model">
               {models.summaryModels.map((model) => <option key={model.id} value={model.id}>{model.name} · {formatSize(model.sizeBytes)}{model.installed ? " · Installed" : ""}</option>)}
             </select>
-            <button className="button primary" disabled={!selectedSummary || modelBusy} onClick={() => models.installSummary(selectedSummaryModel)}>{installingSummaryModel ? `${summaryModelPercentage}%` : selectedSummary?.installed ? "Use model" : "Install"}</button>
+            <button className="button primary" disabled={!selectedSummary || modelBusy || summaryInUse} onClick={() => selectedSummary?.installed ? models.useSummary(selectedSummaryModel) : models.installSummary(selectedSummaryModel)}>{installingSummaryModel ? `${summaryModelPercentage}%` : summaryInUse ? "In use" : selectedSummary?.installed ? "Use model" : "Install"}</button>
             {selectedSummary?.installed && <button className="button model-delete" disabled={modelBusy} onClick={() => {
               if (window.confirm(`Delete ${selectedSummary.name} from this device?`)) void models.removeSummary(selectedSummaryModel);
             }}>Delete</button>}
@@ -834,6 +850,10 @@ function SettingsPage({ app, updater, models }: { app: AppController; updater: A
 
 function modelFileName(path: string) {
   return path.split(/[\\/]/).pop() || path;
+}
+
+function modelPathContainsId(path: string | null, modelId: string) {
+  return path ? modelFileName(path).toLocaleLowerCase().includes(modelId.toLocaleLowerCase()) : false;
 }
 
 function UpdateBanner({ app, updater }: { app: AppController; updater: AppUpdater }) {

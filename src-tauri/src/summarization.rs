@@ -115,6 +115,20 @@ pub fn install_model(
     )
 }
 
+pub fn installed_model_path(models_dir: &Path, model_id: &str) -> AppResult<PathBuf> {
+    let model = MODELS
+        .iter()
+        .find(|model| model.id == model_id)
+        .ok_or_else(|| AppError::State("unknown summary model".into()))?;
+    let path = models_dir.join(model.file);
+    if !path.is_file() || !Checksum::Sha256(model.sha256).matches(&path)? {
+        return Err(AppError::State(
+            "this summary model is not installed correctly".into(),
+        ));
+    }
+    Ok(path)
+}
+
 pub fn remove_model(models_dir: &Path, model_id: &str) -> AppResult<PathBuf> {
     let model = MODELS
         .iter()

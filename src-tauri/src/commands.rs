@@ -9,8 +9,8 @@ use crate::{
     diagnostics::Diagnostics,
     error::{AppError, AppResult},
     models::{
-        AppSnapshot, OnboardingSettings, Recording, RecordingSession, SettingsPatch,
-        StartRecordingInput, SummaryModelInfo, WhisperModelInfo,
+        AppSnapshot, ModelDownloadStatus, OnboardingSettings, Recording, RecordingSession,
+        SettingsPatch, StartRecordingInput, SummaryModelInfo, WhisperModelInfo,
     },
     state::AppState,
 };
@@ -154,6 +154,11 @@ pub fn list_summary_models(state: State<'_, AppState>) -> Vec<SummaryModelInfo> 
 }
 
 #[tauri::command]
+pub fn get_model_download_status(state: State<'_, AppState>) -> Option<ModelDownloadStatus> {
+    state.model_download_status()
+}
+
+#[tauri::command]
 pub async fn install_summary_model(app: AppHandle, model_id: String) -> AppResult<AppSnapshot> {
     tauri::async_runtime::spawn_blocking(move || {
         app.state::<AppState>().install_summary_model(&app, &model_id)
@@ -168,6 +173,14 @@ pub fn remove_summary_model(
     model_id: String,
 ) -> AppResult<AppSnapshot> {
     state.remove_summary_model(&model_id)
+}
+
+#[tauri::command]
+pub fn use_summary_model(
+    state: State<'_, AppState>,
+    model_id: String,
+) -> AppResult<AppSnapshot> {
+    state.use_summary_model(&model_id)
 }
 
 #[tauri::command]
@@ -191,6 +204,14 @@ pub fn remove_whisper_model(
     model_id: String,
 ) -> AppResult<AppSnapshot> {
     state.remove_whisper_model(&model_id)
+}
+
+#[tauri::command]
+pub fn use_whisper_model(
+    state: State<'_, AppState>,
+    model_id: String,
+) -> AppResult<AppSnapshot> {
+    state.use_whisper_model(&model_id)
 }
 
 #[tauri::command]

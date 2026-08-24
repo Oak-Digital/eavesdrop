@@ -116,6 +116,16 @@ pub struct WhisperModelDownloadProgress {
     pub total_bytes: u64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelDownloadStatus {
+    pub kind: String,
+    pub model_id: String,
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
+    pub active: bool,
+}
+
 /// Progress of an in-flight transcription, emitted as `transcription-progress`.
 ///
 /// `progress` is 0.0..=1.0. Decoding runs before Whisper reports anything, so

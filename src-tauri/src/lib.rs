@@ -52,12 +52,15 @@ pub fn run() {
             commands::get_recording_audio,
             commands::transcribe_recording,
             commands::list_whisper_models,
+            commands::get_model_download_status,
             commands::install_whisper_model,
             commands::remove_whisper_model,
+            commands::use_whisper_model,
             commands::summarize_recording,
             commands::list_summary_models,
             commands::install_summary_model,
             commands::remove_summary_model,
+            commands::use_summary_model,
             commands::open_library,
             commands::hide_quick_panel,
             commands::begin_update_install,
@@ -226,10 +229,16 @@ mod tests {
     fn transcription_progress_event_name_matches_the_frontend_listener() {
         // The backend emit and the webview listener are only coupled by this
         // string, so a rename on either side silently breaks the progress bar.
-        let backend = include_str!("transcription.rs");
+        let backend = format!(
+            "{}{}",
+            include_str!("transcription.rs"),
+            include_str!("state.rs")
+        );
         let frontend = include_str!("../../src/api.ts");
         assert!(backend.contains("\"transcription-progress\""));
         assert!(frontend.contains("listen<TranscriptionProgress>(\"transcription-progress\""));
+        assert!(backend.contains("\"model-download-status\""));
+        assert!(frontend.contains("listen<ModelDownloadStatus>(\"model-download-status\""));
     }
 
     #[test]

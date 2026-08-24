@@ -94,6 +94,14 @@ export function useAppState() {
       const next = await run(() => api.installSummaryModel(modelId));
       if (next) setSnapshot(next);
     },
+    useWhisperModel: async (modelId: string) => {
+      const next = await run(() => api.useWhisperModel(modelId));
+      if (next) setSnapshot(next);
+    },
+    useSummaryModel: async (modelId: string) => {
+      const next = await run(() => api.useSummaryModel(modelId));
+      if (next) setSnapshot(next);
+    },
     removeWhisperModel: async (modelId: string) => {
       const next = await run(() => api.removeWhisperModel(modelId));
       if (next) setSnapshot(next);

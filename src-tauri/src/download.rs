@@ -36,7 +36,7 @@ impl Checksum<'_> {
         }
     }
 
-    fn matches(&self, path: &Path) -> AppResult<bool> {
+    pub(crate) fn matches(&self, path: &Path) -> AppResult<bool> {
         let actual = match self {
             Self::Sha1(_) => file_digest::<Sha1>(path)?,
             Self::Sha256(_) => file_digest::<Sha256>(path)?,
