@@ -72,6 +72,7 @@ fn backend() -> EngineResult<&'static LlamaBackend> {
 pub fn summarize(
     transcript: &Transcript,
     model_path: &Path,
+    custom_prompt: Option<&str>,
     on_progress: &mut dyn FnMut(SummarizationStage, f32),
 ) -> EngineResult<Summary> {
     if !model_path.is_file() {
@@ -116,7 +117,7 @@ pub fn summarize(
                 backend,
                 &template,
                 NOTES_SYSTEM,
-                &notes_prompt(index, chunks.len(), &language, chunk),
+                &notes_prompt(index, chunks.len(), &language, chunk, custom_prompt),
                 NOTES_TOKENS,
                 threads,
                 |ratio| {
@@ -140,7 +141,7 @@ pub fn summarize(
         backend,
         &template,
         SUMMARY_SYSTEM,
-        &summary_prompt(&language, &material, from_notes),
+        &summary_prompt(&language, &material, from_notes, custom_prompt),
         SUMMARY_TOKENS,
         threads,
         |ratio| {
@@ -172,24 +173,44 @@ says and never invent names, numbers, or commitments. Write about the meeting it
 mention the transcript, the notes, or these instructions. Reply using exactly the requested \
 sections, with no preamble and no closing remarks.";
 
-fn notes_prompt(index: usize, total: usize, language: &str, chunk: &str) -> String {
+fn notes_prompt(
+    index: usize,
+    total: usize,
+    language: &str,
+    chunk: &str,
+    custom_prompt: Option<&str>,
+) -> String {
+    let custom = custom_prompt
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("\n\nWhen choosing what to retain for the final summary, follow these user instructions:\n{value}"))
+        .unwrap_or_default();
     format!(
         "Minutes {} of {} from one meeting:\n\n{chunk}\n\nList the topics discussed, any \
 decisions reached, and any tasks assigned along with who owns them. Keep every bullet to one \
-short sentence, and write each one so it still makes sense on its own. {language}",
+short sentence, and write each one so it still makes sense on its own. {language}{custom}",
         index + 1,
         total
     )
 }
 
-fn summary_prompt(language: &str, material: &str, from_notes: bool) -> String {
+fn summary_prompt(
+    language: &str,
+    material: &str,
+    from_notes: bool,
+    custom_prompt: Option<&str>,
+) -> String {
     let source = if from_notes {
         "Notes from one meeting"
     } else {
         "A meeting"
     };
+    let instructions = custom_prompt
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Summarize the meeting clearly and concisely. Focus on the topics discussed, decisions reached, and tasks assigned, including who owns them.");
     format!(
-        "{source}:\n\n{material}\n\nSummarize the meeting above using exactly this layout:\n\n\
+        "{source}:\n\n{material}\n\nUser instructions for the summary:\n{instructions}\n\nWrite the result using exactly this layout:\n\n\
 TITLE: at most eight words naming what this meeting was actually about\n\
 OVERVIEW: two or three sentences on what happened\n\
 KEY POINTS:\n- one short sentence per topic that was discussed\n\
@@ -539,6 +560,7 @@ fn main() {
     match summarize(
         &request.transcript,
         Path::new(&request.model_path),
+        request.summary_prompt.as_deref(),
         &mut on_progress,
     ) {
         Ok(summary) => emit(&Event::Summary(Box::new(summary))),
@@ -641,5 +663,40 @@ mod tests {
         );
         assert!(language_instruction(None).contains("language spoken in the transcript"));
         assert!(language_instruction(Some("  ")).contains("language spoken in the transcript"));
+    }
+
+    #[test]
+    fn custom_instructions_reach_short_and_long_meeting_passes() {
+        let custom = "Focus on risks and unanswered questions. Use a direct tone.";
+        let notes = notes_prompt(
+            0,
+            2,
+            "Write everything in English.",
+            "A transcript slice.",
+            Some(custom),
+        );
+        let summary = summary_prompt(
+            "Write everything in English.",
+            "Meeting material.",
+            true,
+            Some(custom),
+        );
+
+        assert!(notes.contains(custom));
+        assert!(summary.contains(custom));
+        assert!(summary.contains("TITLE:"));
+        assert!(summary.contains("ACTION ITEMS:"));
+    }
+
+    #[test]
+    fn blank_custom_instructions_use_the_default_prompt() {
+        let prompt = summary_prompt(
+            "Write everything in English.",
+            "Meeting material.",
+            false,
+            Some("  "),
+        );
+
+        assert!(prompt.contains("Summarize the meeting clearly and concisely."));
     }
 }

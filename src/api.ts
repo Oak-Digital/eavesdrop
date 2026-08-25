@@ -43,6 +43,7 @@ const mockSnapshot: AppSnapshot = {
     microphoneId: null,
     whisperModelPath: null,
     summaryModelPath: null,
+    summaryPrompt: null,
   },
   devices: [{ id: "default", name: "Default microphone", isDefault: true }],
 };
@@ -244,6 +245,7 @@ export async function summarizeRecording(id: string): Promise<Recording> {
     model: "summary.gguf",
     createdAt: new Date().toISOString(),
   };
+  item.title = item.summary.suggestedTitle;
   return structuredClone(item);
 }
 

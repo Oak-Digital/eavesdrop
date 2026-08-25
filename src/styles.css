@@ -48,7 +48,7 @@
 * { box-sizing: border-box; }
 html, body, #root { margin: 0; width: 100%; min-height: 100%; }
 body { overflow: hidden; background: var(--bg-canvas); color: var(--text-primary); }
-button, input, select { font: inherit; }
+button, input, select, textarea { font: inherit; }
 button { color: inherit; }
 h1, h2, h3 { letter-spacing: -0.018em; }
 
@@ -115,7 +115,7 @@ h1, h2, h3 { letter-spacing: -0.018em; }
 .header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
 
 .button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 28px; padding: 0 10px; border: 1px solid transparent; border-radius: 999px; font-size: 12px; font-weight: 520; cursor: pointer; transition: background 120ms ease, border-color 120ms ease, color 120ms ease; }
-.button:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }
+.button:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }
 .button:disabled, button:disabled { cursor: default; opacity: .45; }
 .button.primary { background: var(--accent); color: var(--accent-fg); box-shadow: var(--shadow-panel); }
 .button.primary:hover:not(:disabled) { background: var(--accent-hover); }
@@ -246,6 +246,13 @@ h1, h2, h3 { letter-spacing: -0.018em; }
 .model-install-controls .model-delete { border-color: color-mix(in srgb, var(--danger) 45%, var(--border-subtle)); background: transparent; color: var(--danger); }
 .model-install-controls .model-delete:hover:not(:disabled) { background: var(--danger-soft); }
 .model-description { color: var(--text-tertiary) !important; }
+.summary-prompt-setting { display: grid; gap: 7px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border-subtle); }
+.summary-prompt-setting label { font-size: 13px; font-weight: 520; }
+.summary-prompt-setting > p { max-width: 580px; margin: 0; color: var(--text-secondary); font-size: 11px; line-height: 1.45; }
+.summary-prompt-setting textarea { width: 100%; min-height: 116px; resize: vertical; padding: 9px 10px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg-base); color: var(--text-primary); font-size: 12px; line-height: 1.5; }
+.summary-prompt-setting textarea:focus { border-color: var(--border-focus); }
+.summary-prompt-actions { display: flex; justify-content: flex-end; gap: 7px; }
+.summary-prompt-actions .button { margin: 0; }
 
 .quick-panel { width: 360px; min-height: 100vh; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border-strong); background: var(--bg-base); box-shadow: var(--shadow-popover); }
 .quick-drag-region { height: 44px; display: flex; align-items: center; justify-content: space-between; padding: 0 8px 0 10px; border-bottom: 1px solid var(--border-subtle); -webkit-app-region: drag; }

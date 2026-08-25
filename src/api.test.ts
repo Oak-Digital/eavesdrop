@@ -12,6 +12,8 @@ import {
   restoreRecordings,
   startRecording,
   stopRecording,
+  summarizeRecording,
+  updateSettings,
   useWhisperModel,
 } from "./api";
 
@@ -31,6 +33,29 @@ describe("bulk recording actions", () => {
     await restoreRecordings([first.id, second.id]);
     expect(await listRecordings(false)).toHaveLength(2);
     expect(await listRecordings(true)).toHaveLength(0);
+  });
+});
+
+describe("summary prompt settings", () => {
+  beforeEach(resetBrowserMock);
+
+  it("stores a custom summary prompt", async () => {
+    await updateSettings({ summaryPrompt: "Focus on risks and unanswered questions." });
+    expect((await getSnapshot()).settings.summaryPrompt).toBe("Focus on risks and unanswered questions.");
+  });
+});
+
+describe("summary titles", () => {
+  beforeEach(resetBrowserMock);
+
+  it("renames a recording to the generated summary title", async () => {
+    await startRecording({ mode: "in_person" });
+    const recording = await stopRecording();
+
+    const summarized = await summarizeRecording(recording.id);
+
+    expect(summarized.title).toBe(summarized.summary?.suggestedTitle);
+    expect((await listRecordings(false))[0].title).toBe("Example local summary");
   });
 });
 

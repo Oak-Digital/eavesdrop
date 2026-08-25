@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 pub struct Request {
     pub transcript: Transcript,
     pub model_path: String,
+    #[serde(default)]
+    pub summary_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

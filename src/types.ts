@@ -138,6 +138,7 @@ export interface AppSettings {
   microphoneId: string | null;
   whisperModelPath: string | null;
   summaryModelPath: string | null;
+  summaryPrompt: string | null;
 }
 
 export interface AppSnapshot {

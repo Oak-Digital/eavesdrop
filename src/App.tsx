@@ -23,6 +23,7 @@ import { useUpdater } from "./useUpdater";
 
 type LibraryPage = "recordings" | "deleted" | "settings";
 const isMac = /Macintosh|Mac OS X/.test(navigator.userAgent);
+const DEFAULT_SUMMARY_PROMPT = "Summarize the meeting clearly and concisely. Focus on the topics discussed, decisions reached, and tasks assigned, including who owns them.";
 
 function beginWindowDrag(event: React.MouseEvent<HTMLElement>) {
   if (event.button !== 0 || !("__TAURI_INTERNALS__" in window)) return;
@@ -584,7 +585,9 @@ function RecordingDetail({ recording, deleted, whisperModelPath, summaryModelPat
               setSummaryError(null);
               onJobStart(recording, "Loading summary model");
               try {
-                onChanged(await api.summarizeRecording(recording.id));
+                const summarized = await api.summarizeRecording(recording.id);
+                setTitle(summarized.title);
+                onChanged(summarized);
               } catch (cause) {
                 setSummaryError(cause instanceof Error ? cause.message : String(cause));
               } finally {
@@ -734,6 +737,8 @@ function SettingsPage({ app, updater, models }: { app: AppController; updater: A
   const snapshot = app.snapshot!;
   const [selectedWhisperModel, setSelectedWhisperModel] = useState("base");
   const [selectedSummaryModel, setSelectedSummaryModel] = useState("qwen2.5-1.5b");
+  const [summaryPrompt, setSummaryPrompt] = useState(snapshot.settings.summaryPrompt ?? DEFAULT_SUMMARY_PROMPT);
+  const [savingSummaryPrompt, setSavingSummaryPrompt] = useState(false);
   const recordingActive = ["starting", "recording", "paused", "finalizing"].includes(snapshot.session.phase);
   const update = updater.state;
   const updateDescription = update.phase === "available"
@@ -753,6 +758,9 @@ function SettingsPage({ app, updater, models }: { app: AppController; updater: A
     const active = models.summaryModels.find((model) => modelPathContainsId(snapshot.settings.summaryModelPath, model.id));
     if (active) setSelectedSummaryModel(active.id);
   }, [models.summaryModels, snapshot.settings.summaryModelPath]);
+  useEffect(() => {
+    setSummaryPrompt(snapshot.settings.summaryPrompt ?? DEFAULT_SUMMARY_PROMPT);
+  }, [snapshot.settings.summaryPrompt]);
   const selectedModel = models.whisperModels.find((model) => model.id === selectedWhisperModel);
   const selectedSummary = models.summaryModels.find((model) => model.id === selectedSummaryModel);
   const percentageOf = (progress: ModelDownloadStatus | null) => progress?.totalBytes
@@ -765,6 +773,16 @@ function SettingsPage({ app, updater, models }: { app: AppController; updater: A
   const modelBusy = models.download !== null;
   const whisperInUse = selectedModel ? modelPathContainsId(snapshot.settings.whisperModelPath, selectedModel.id) : false;
   const summaryInUse = selectedSummary ? modelPathContainsId(snapshot.settings.summaryModelPath, selectedSummary.id) : false;
+  const normalizedSummaryPrompt = summaryPrompt.trim();
+  const storedSummaryPrompt = snapshot.settings.summaryPrompt ?? DEFAULT_SUMMARY_PROMPT;
+  const summaryPromptChanged = normalizedSummaryPrompt !== storedSummaryPrompt;
+  const saveSummaryPrompt = async (prompt: string) => {
+    const normalized = prompt.trim();
+    if (!normalized) return;
+    setSavingSummaryPrompt(true);
+    await app.updateSettings({ summaryPrompt: normalized });
+    setSavingSummaryPrompt(false);
+  };
   return (
     <div className="settings-page">
       <header className="content-header"><div><h1>Settings</h1><p>Recording sources and app behavior.</p></div></header>
@@ -813,6 +831,24 @@ function SettingsPage({ app, updater, models }: { app: AppController; updater: A
           </div>
           {selectedSummary && <p className="model-description">{selectedSummary.description}</p>}
           {installingSummaryModel && <progress className="update-progress" max={100} value={summaryModelPercentage} aria-label="Summary model download progress" />}
+        </div>
+        <div className="summary-prompt-setting">
+          <label htmlFor="summary-prompt">Summary prompt</label>
+          <p>Choose what the summary should emphasize and how it should be written. The title, overview, key points, decisions, and action items sections are kept so Eavesdrop can display the result.</p>
+          <textarea
+            id="summary-prompt"
+            value={summaryPrompt}
+            maxLength={6000}
+            rows={6}
+            onChange={(event) => setSummaryPrompt(event.target.value)}
+          />
+          <div className="summary-prompt-actions">
+            <button className="button secondary" disabled={savingSummaryPrompt || (normalizedSummaryPrompt === DEFAULT_SUMMARY_PROMPT && storedSummaryPrompt === DEFAULT_SUMMARY_PROMPT)} onClick={() => {
+              setSummaryPrompt(DEFAULT_SUMMARY_PROMPT);
+              void saveSummaryPrompt(DEFAULT_SUMMARY_PROMPT);
+            }}>Use default</button>
+            <button className="button primary" disabled={savingSummaryPrompt || !normalizedSummaryPrompt || !summaryPromptChanged} onClick={() => void saveSummaryPrompt(summaryPrompt)}>{savingSummaryPrompt ? "Saving…" : "Save prompt"}</button>
+          </div>
         </div>
       </section>
       <section className="settings-section">

@@ -130,6 +130,7 @@ impl Repository {
         )?;
         ensure_column(&connection, "settings", "whisper_model_path", "TEXT")?;
         ensure_column(&connection, "settings", "summary_model_path", "TEXT")?;
+        ensure_column(&connection, "settings", "summary_prompt", "TEXT")?;
         Ok(())
     }
 
@@ -139,7 +140,7 @@ impl Repository {
             .lock()
             .map_err(|_| AppError::Storage("database lock poisoned".into()))?;
         connection.query_row(
-            "SELECT onboarding_completed, meeting_detection_enabled, launch_at_login, microphone_id, whisper_model_path, summary_model_path FROM settings WHERE singleton = 1",
+            "SELECT onboarding_completed, meeting_detection_enabled, launch_at_login, microphone_id, whisper_model_path, summary_model_path, summary_prompt FROM settings WHERE singleton = 1",
             [],
             |row| Ok(AppSettings {
                 onboarding_completed: row.get::<_, i64>(0)? != 0,
@@ -148,6 +149,7 @@ impl Repository {
                 microphone_id: row.get(3)?,
                 whisper_model_path: row.get(4)?,
                 summary_model_path: row.get(5)?,
+                summary_prompt: row.get(6)?,
             }),
         ).map_err(Into::into)
     }
@@ -171,14 +173,18 @@ impl Repository {
                 .summary_model_path
                 .clone()
                 .unwrap_or(current.summary_model_path),
+            summary_prompt: patch
+                .summary_prompt
+                .clone()
+                .unwrap_or(current.summary_prompt),
         };
         let connection = self
             .connection
             .lock()
             .map_err(|_| AppError::Storage("database lock poisoned".into()))?;
         connection.execute(
-            "UPDATE settings SET onboarding_completed = ?1, meeting_detection_enabled = ?2, launch_at_login = ?3, microphone_id = ?4, whisper_model_path = ?5, summary_model_path = ?6 WHERE singleton = 1",
-            params![next.onboarding_completed, next.meeting_detection_enabled, next.launch_at_login, next.microphone_id, next.whisper_model_path, next.summary_model_path],
+            "UPDATE settings SET onboarding_completed = ?1, meeting_detection_enabled = ?2, launch_at_login = ?3, microphone_id = ?4, whisper_model_path = ?5, summary_model_path = ?6, summary_prompt = ?7 WHERE singleton = 1",
+            params![next.onboarding_completed, next.meeting_detection_enabled, next.launch_at_login, next.microphone_id, next.whisper_model_path, next.summary_model_path, next.summary_prompt],
         )?;
         Ok(next)
     }
@@ -629,15 +635,24 @@ mod tests {
             .update_settings(&SettingsPatch {
                 onboarding_completed: Some(true),
                 whisper_model_path: Some(Some("model.bin".into())),
+                summary_prompt: Some(Some("Focus on open risks.".into())),
                 ..Default::default()
             })
             .unwrap();
         assert!(updated.onboarding_completed);
         assert_eq!(updated.whisper_model_path.as_deref(), Some("model.bin"));
+        assert_eq!(
+            updated.summary_prompt.as_deref(),
+            Some("Focus on open risks.")
+        );
         let reopened = Repository::open(&temp.path().join("library.sqlite3")).unwrap();
         assert_eq!(
             reopened.settings().unwrap().whisper_model_path.as_deref(),
             Some("model.bin")
+        );
+        assert_eq!(
+            reopened.settings().unwrap().summary_prompt.as_deref(),
+            Some("Focus on open risks.")
         );
     }
 

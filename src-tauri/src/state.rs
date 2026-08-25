@@ -329,13 +329,19 @@ impl AppState {
         let result: AppResult<Summary> = crate::summarization::summarize(
             &transcript,
             Path::new(&model_path),
+            settings.summary_prompt.as_deref(),
             &mut on_progress,
         );
         if let Ok(mut active) = self.summarization_active.lock() {
             *active = false;
         }
-        self.repository.save_summary(id, &result?)?;
-        self.repository.recording(id)
+        let summary = result?;
+        self.repository.save_summary(id, &summary)?;
+        if summary.suggested_title.trim().is_empty() {
+            self.repository.recording(id)
+        } else {
+            self.repository.rename_recording(id, &summary.suggested_title)
+        }
     }
 
     pub fn summary_models(&self) -> Vec<SummaryModelInfo> {

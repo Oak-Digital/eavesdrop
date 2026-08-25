@@ -230,6 +230,7 @@ pub struct AppSettings {
     pub microphone_id: Option<String>,
     pub whisper_model_path: Option<String>,
     pub summary_model_path: Option<String>,
+    pub summary_prompt: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -241,6 +242,7 @@ impl Default for AppSettings {
             microphone_id: None,
             whisper_model_path: None,
             summary_model_path: None,
+            summary_prompt: None,
         }
     }
 }
@@ -270,6 +272,7 @@ pub struct SettingsPatch {
     pub microphone_id: Option<Option<String>>,
     pub whisper_model_path: Option<Option<String>>,
     pub summary_model_path: Option<Option<String>>,
+    pub summary_prompt: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

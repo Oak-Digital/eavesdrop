@@ -34,6 +34,7 @@ use crate::{
 struct Request<'a> {
     transcript: &'a Transcript,
     model_path: &'a str,
+    summary_prompt: Option<&'a str>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -183,6 +184,7 @@ fn engine_path() -> AppResult<PathBuf> {
 pub fn summarize(
     transcript: &Transcript,
     model_path: &Path,
+    summary_prompt: Option<&str>,
     on_progress: &mut dyn FnMut(SummarizationStage, f32),
 ) -> AppResult<Summary> {
     let engine = engine_path()?;
@@ -192,6 +194,7 @@ pub fn summarize(
     let request = serde_json::to_string(&Request {
         transcript,
         model_path,
+        summary_prompt,
     })
     .map_err(|error| AppError::Other(format!("could not build the summary request: {error}")))?;
 
@@ -343,9 +346,11 @@ mod tests {
         let json = serde_json::to_string(&Request {
             transcript: &transcript,
             model_path: "/models/m.gguf",
+            summary_prompt: Some("Focus on customer feedback."),
         })
         .unwrap();
         assert!(json.contains("\"modelPath\":\"/models/m.gguf\""));
+        assert!(json.contains("\"summaryPrompt\":\"Focus on customer feedback.\""));
         assert!(json.contains("\"transcript\""));
     }
 }
