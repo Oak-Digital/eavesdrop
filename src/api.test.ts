@@ -102,6 +102,15 @@ describe("summary prompt settings", () => {
   });
 });
 
+describe("appearance settings", () => {
+  beforeEach(resetBrowserMock);
+
+  it("stores a light theme preference", async () => {
+    await updateSettings({ theme: "light" });
+    expect((await getSnapshot()).settings.theme).toBe("light");
+  });
+});
+
 describe("summary titles", () => {
   beforeEach(resetBrowserMock);
 

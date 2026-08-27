@@ -14,6 +14,7 @@ export function useAppState() {
     api.getSnapshot().then((value) => mounted && setSnapshot(value)).catch((cause) => setError(String(cause)));
     Promise.all([
       api.onSessionChanged((session) => setSnapshot((current) => current ? { ...current, session } : current)),
+      api.onSettingsChanged((settings) => setSnapshot((current) => current ? { ...current, settings } : current)),
       api.onAudioLevels((levels: AudioLevels) => setSnapshot((current) => current ? {
         ...current,
         session: { ...current.session, micLevel: levels.mic, systemLevel: levels.system },

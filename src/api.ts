@@ -40,6 +40,7 @@ const mockSnapshot: AppSnapshot = {
     onboardingCompleted: false,
     meetingDetectionEnabled: true,
     launchAtLogin: false,
+    theme: "dark",
     microphoneId: null,
     whisperModelPath: null,
     summaryModelPath: null,
@@ -436,6 +437,11 @@ export async function onSessionChanged(handler: (session: RecordingSession) => v
     return () => browserSessionListeners.delete(handler);
   }
   return listen<RecordingSession>("recording-state-changed", (event) => handler(event.payload));
+}
+
+export async function onSettingsChanged(handler: (settings: AppSettings) => void): Promise<UnlistenFn> {
+  if (!isTauri()) return () => undefined;
+  return listen<AppSettings>("settings-changed", (event) => handler(event.payload));
 }
 
 export async function onAudioLevels(handler: (levels: AudioLevels) => void): Promise<UnlistenFn> {

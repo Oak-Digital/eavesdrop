@@ -19,6 +19,7 @@ import {
 } from "./icons";
 import type { AppSnapshot, CaptureMode, ModelDownloadStatus, Recording, SummarizationStage, SummaryModelInfo, TranscriptionStage, WhisperModelInfo } from "./types";
 import { libraryRecordingAction } from "./recordingAction";
+import { applyTheme } from "./theme";
 import { useAppState } from "./useAppState";
 import { useUpdater } from "./useUpdater";
 
@@ -38,6 +39,10 @@ export default function App() {
   const app = useAppState();
   const surface = new URLSearchParams(window.location.search).get("surface") ?? "library";
   const updater = useUpdater(surface !== "quick");
+
+  useEffect(() => {
+    if (app.snapshot) applyTheme(app.snapshot.settings.theme);
+  }, [app.snapshot?.settings.theme]);
 
   if (!app.snapshot) return <div className="loading">Opening Eavesdrop…</div>;
   if (surface === "quick") return <QuickPanel app={app} />;
@@ -850,6 +855,10 @@ function SettingsPage({ app, updater, models }: { app: AppController; updater: A
   return (
     <div className="settings-page">
       <header className="content-header"><div><h1>Settings</h1><p>Recording sources and app behavior.</p></div></header>
+      <section className="settings-section">
+        <h2>Appearance</h2>
+        <label className="field-label">Theme<select value={snapshot.settings.theme} onChange={(event) => app.updateSettings({ theme: event.target.value as AppSnapshot["settings"]["theme"] })}><option value="light">Light</option><option value="dark">Dark</option><option value="system">System</option></select></label>
+      </section>
       <section className="settings-section">
         <h2>Recording</h2>
         <label className="field-label">Microphone<select value={snapshot.settings.microphoneId ?? ""} onChange={(event) => app.updateSettings({ microphoneId: event.target.value || null })}><option value="">System default</option>{snapshot.devices.map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}</select></label>

@@ -1,4 +1,5 @@
 export type CaptureMode = "in_person" | "online";
+export type ThemePreference = "light" | "dark" | "system";
 export type RecordingPhase =
   | "idle"
   | "starting"
@@ -135,6 +136,7 @@ export interface AppSettings {
   onboardingCompleted: boolean;
   meetingDetectionEnabled: boolean;
   launchAtLogin: boolean;
+  theme: ThemePreference;
   microphoneId: string | null;
   whisperModelPath: string | null;
   summaryModelPath: string | null;

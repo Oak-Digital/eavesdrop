@@ -49,7 +49,8 @@ pub fn update_settings(
     if let Some(value) = settings.launch_at_login {
         apply_autostart(&app, value)?;
     }
-    state.update_settings(&settings)?;
+    let updated = state.update_settings(&settings)?;
+    let _ = app.emit("settings-changed", updated);
     state.snapshot(false)
 }
 

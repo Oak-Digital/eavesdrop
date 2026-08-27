@@ -221,12 +221,39 @@ pub struct PermissionState {
     pub system_audio: PermissionValue,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemePreference {
+    Light,
+    Dark,
+    System,
+}
+
+impl ThemePreference {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Light => "light",
+            Self::Dark => "dark",
+            Self::System => "system",
+        }
+    }
+
+    pub fn from_stored(value: &str) -> Self {
+        match value {
+            "light" => Self::Light,
+            "system" => Self::System,
+            _ => Self::Dark,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub onboarding_completed: bool,
     pub meeting_detection_enabled: bool,
     pub launch_at_login: bool,
+    pub theme: ThemePreference,
     pub microphone_id: Option<String>,
     pub whisper_model_path: Option<String>,
     pub summary_model_path: Option<String>,
@@ -239,6 +266,7 @@ impl Default for AppSettings {
             onboarding_completed: false,
             meeting_detection_enabled: true,
             launch_at_login: false,
+            theme: ThemePreference::Dark,
             microphone_id: None,
             whisper_model_path: None,
             summary_model_path: None,
@@ -269,6 +297,7 @@ pub struct SettingsPatch {
     pub onboarding_completed: Option<bool>,
     pub meeting_detection_enabled: Option<bool>,
     pub launch_at_login: Option<bool>,
+    pub theme: Option<ThemePreference>,
     pub microphone_id: Option<Option<String>>,
     pub whisper_model_path: Option<Option<String>>,
     pub summary_model_path: Option<Option<String>>,

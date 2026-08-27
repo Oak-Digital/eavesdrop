@@ -6,8 +6,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::{
     error::{AppError, AppResult},
     models::{
-        AppSettings, CaptureMode, Highlight, Recording, SettingsPatch, Summary, Transcript,
-        TranscriptSegment,
+        AppSettings, CaptureMode, Highlight, Recording, SettingsPatch, Summary, ThemePreference,
+        Transcript, TranscriptSegment,
     },
 };
 
@@ -131,6 +131,12 @@ impl Repository {
         ensure_column(&connection, "settings", "whisper_model_path", "TEXT")?;
         ensure_column(&connection, "settings", "summary_model_path", "TEXT")?;
         ensure_column(&connection, "settings", "summary_prompt", "TEXT")?;
+        ensure_column(
+            &connection,
+            "settings",
+            "theme",
+            "TEXT NOT NULL DEFAULT 'dark'",
+        )?;
         Ok(())
     }
 
@@ -140,7 +146,7 @@ impl Repository {
             .lock()
             .map_err(|_| AppError::Storage("database lock poisoned".into()))?;
         connection.query_row(
-            "SELECT onboarding_completed, meeting_detection_enabled, launch_at_login, microphone_id, whisper_model_path, summary_model_path, summary_prompt FROM settings WHERE singleton = 1",
+            "SELECT onboarding_completed, meeting_detection_enabled, launch_at_login, microphone_id, whisper_model_path, summary_model_path, summary_prompt, theme FROM settings WHERE singleton = 1",
             [],
             |row| Ok(AppSettings {
                 onboarding_completed: row.get::<_, i64>(0)? != 0,
@@ -150,6 +156,7 @@ impl Repository {
                 whisper_model_path: row.get(4)?,
                 summary_model_path: row.get(5)?,
                 summary_prompt: row.get(6)?,
+                theme: ThemePreference::from_stored(&row.get::<_, String>(7)?),
             }),
         ).map_err(Into::into)
     }
@@ -164,6 +171,7 @@ impl Repository {
                 .meeting_detection_enabled
                 .unwrap_or(current.meeting_detection_enabled),
             launch_at_login: patch.launch_at_login.unwrap_or(current.launch_at_login),
+            theme: patch.theme.unwrap_or(current.theme),
             microphone_id: patch.microphone_id.clone().unwrap_or(current.microphone_id),
             whisper_model_path: patch
                 .whisper_model_path
@@ -183,8 +191,8 @@ impl Repository {
             .lock()
             .map_err(|_| AppError::Storage("database lock poisoned".into()))?;
         connection.execute(
-            "UPDATE settings SET onboarding_completed = ?1, meeting_detection_enabled = ?2, launch_at_login = ?3, microphone_id = ?4, whisper_model_path = ?5, summary_model_path = ?6, summary_prompt = ?7 WHERE singleton = 1",
-            params![next.onboarding_completed, next.meeting_detection_enabled, next.launch_at_login, next.microphone_id, next.whisper_model_path, next.summary_model_path, next.summary_prompt],
+            "UPDATE settings SET onboarding_completed = ?1, meeting_detection_enabled = ?2, launch_at_login = ?3, microphone_id = ?4, whisper_model_path = ?5, summary_model_path = ?6, summary_prompt = ?7, theme = ?8 WHERE singleton = 1",
+            params![next.onboarding_completed, next.meeting_detection_enabled, next.launch_at_login, next.microphone_id, next.whisper_model_path, next.summary_model_path, next.summary_prompt, next.theme.as_str()],
         )?;
         Ok(next)
     }
@@ -634,12 +642,14 @@ mod tests {
         let updated = repository
             .update_settings(&SettingsPatch {
                 onboarding_completed: Some(true),
+                theme: Some(ThemePreference::Light),
                 whisper_model_path: Some(Some("model.bin".into())),
                 summary_prompt: Some(Some("Focus on open risks.".into())),
                 ..Default::default()
             })
             .unwrap();
         assert!(updated.onboarding_completed);
+        assert_eq!(updated.theme, ThemePreference::Light);
         assert_eq!(updated.whisper_model_path.as_deref(), Some("model.bin"));
         assert_eq!(
             updated.summary_prompt.as_deref(),
@@ -654,6 +664,7 @@ mod tests {
             reopened.settings().unwrap().summary_prompt.as_deref(),
             Some("Focus on open risks.")
         );
+        assert_eq!(reopened.settings().unwrap().theme, ThemePreference::Light);
     }
 
     #[test]
