@@ -187,6 +187,7 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [startingFromLibrary, setStartingFromLibrary] = useState(false);
   const [activity, setActivity] = useState<ActivityState | null>(null);
+  const activityRef = useRef<ActivityState | null>(null);
   const models = useModelManager(app);
 
   const reload = async () => {
@@ -220,17 +221,20 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
     }).then(keep);
 
     // Ignore stragglers for a run the detail view already finished or cancelled.
-    const advance = (recordingId: string, label: string, progress: number) =>
-      setActivity((current) => current && current.recordingId === recordingId
-        ? { ...current, label, progress }
-        : current);
+    const advance = (kind: ActivityKind, recordingId: string, label: string, progress: number) =>
+      setActivity((current) => {
+        if (!current || current.kind !== kind || current.recordingId !== recordingId) return current;
+        const next = { ...current, label, progress };
+        activityRef.current = next;
+        return next;
+      });
 
     void api.onTranscriptionProgress((progress) => {
-      advance(progress.recordingId, transcriptionLabel(progress.stage), progress.progress);
+      advance("transcription", progress.recordingId, transcriptionLabel(progress.stage), progress.progress);
     }).then(keep);
 
     void api.onSummarizationProgress((progress) => {
-      advance(progress.recordingId, summarizationLabel(progress.stage), progress.progress);
+      advance("summary", progress.recordingId, summarizationLabel(progress.stage), progress.progress);
     }).then(keep);
 
     void api.onOpenRecording(async (recordingId) => {
@@ -314,6 +318,21 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
     }
   };
 
+  const beginActivity = (item: Recording, kind: ActivityKind, label: string) => {
+    if (activityRef.current) return false;
+    const next = { kind, recordingId: item.id, title: item.title, label, progress: 0 };
+    activityRef.current = next;
+    setActivity(next);
+    return true;
+  };
+
+  const endActivity = (recordingId: string, kind: ActivityKind) => {
+    const current = activityRef.current;
+    if (!current || current.kind !== kind || current.recordingId !== recordingId) return;
+    activityRef.current = null;
+    setActivity((value) => value?.kind === kind && value.recordingId === recordingId ? null : value);
+  };
+
   if (!app.snapshot) return null;
   if (!app.snapshot.settings.onboardingCompleted) {
     return <Onboarding app={app} />;
@@ -346,6 +365,7 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
             deleted={page === "deleted"}
             whisperModelPath={app.snapshot.settings.whisperModelPath}
             summaryModelPath={app.snapshot.settings.summaryModelPath}
+            activity={activity}
             onChooseWhisperModel={async () => {
               const path = await api.selectWhisperModel();
               if (path) await app.updateSettings({ whisperModelPath: path });
@@ -355,8 +375,8 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
               if (path) await app.updateSettings({ summaryModelPath: path });
             }}
             onBack={() => setSelected(null)}
-            onJobStart={(item, label) => setActivity({ recordingId: item.id, title: item.title, label, progress: 0 })}
-            onJobEnd={(id) => setActivity((current) => current?.recordingId === id ? null : current)}
+            onJobStart={beginActivity}
+            onJobEnd={endActivity}
             onChanged={(recording) => {
               setSelected(recording);
               setRecordings((items) => items.map((item) => item.id === recording.id ? recording : item));
@@ -407,7 +427,8 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
 }
 
 // One long-running local job — a transcript or a summary — shown in the sidebar.
-type ActivityState = { recordingId: string; title: string; label: string; progress: number };
+export type ActivityKind = "transcription" | "summary";
+export type ActivityState = { kind: ActivityKind; recordingId: string; title: string; label: string; progress: number };
 
 function useModelManager(app: AppController) {
   const [whisperModels, setWhisperModels] = useState<WhisperModelInfo[]>([]);
@@ -559,14 +580,15 @@ function RecordingList({ items, loading, deleted, selectionMode, selectedIds, on
   );
 }
 
-export function RecordingDetail({ recording, deleted, whisperModelPath, summaryModelPath, onChooseWhisperModel, onChooseSummaryModel, onBack, onJobStart, onJobEnd, onChanged, onRemoved }: { recording: Recording; deleted: boolean; whisperModelPath: string | null; summaryModelPath: string | null; onChooseWhisperModel: () => Promise<void>; onChooseSummaryModel: () => Promise<void>; onBack: () => void; onJobStart: (item: Recording, label: string) => void; onJobEnd: (id: string) => void; onChanged: (item: Recording) => void; onRemoved: () => void }) {
+export function RecordingDetail({ recording, deleted, whisperModelPath, summaryModelPath, activity, onChooseWhisperModel, onChooseSummaryModel, onBack, onJobStart, onJobEnd, onChanged, onRemoved }: { recording: Recording; deleted: boolean; whisperModelPath: string | null; summaryModelPath: string | null; activity: ActivityState | null; onChooseWhisperModel: () => Promise<void>; onChooseSummaryModel: () => Promise<void>; onBack: () => void; onJobStart: (item: Recording, kind: ActivityKind, label: string) => boolean; onJobEnd: (id: string, kind: ActivityKind) => void; onChanged: (item: Recording) => void; onRemoved: () => void }) {
   const [title, setTitle] = useState(recording.title);
   const [busy, setBusy] = useState(false);
   const [titleError, setTitleError] = useState<string | null>(null);
-  const [transcribing, setTranscribing] = useState(false);
   const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
-  const [summarizing, setSummarizing] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
+  const transcribing = activity?.kind === "transcription" && activity.recordingId === recording.id;
+  const summarizing = activity?.kind === "summary" && activity.recordingId === recording.id;
+  const processing = activity !== null;
   useEffect(() => {
     setTitle(recording.title);
     setTitleError(null);
@@ -626,10 +648,9 @@ export function RecordingDetail({ recording, deleted, whisperModelPath, summaryM
         <div className="section-heading">
           <div><h2>Summary</h2>{recording.summary && <span>{recording.summary.model}</span>}</div>
           {!deleted && (summaryModelPath ? (
-            <button className="button secondary compact-button" disabled={summarizing || !recording.transcript} onClick={async () => {
-              setSummarizing(true);
+            <button className="button secondary compact-button" disabled={processing || !recording.transcript} onClick={async () => {
+              if (!onJobStart(recording, "summary", "Loading summary model")) return;
               setSummaryError(null);
-              onJobStart(recording, "Loading summary model");
               try {
                 const summarized = await api.summarizeRecording(recording.id);
                 setTitle(summarized.title);
@@ -637,8 +658,7 @@ export function RecordingDetail({ recording, deleted, whisperModelPath, summaryM
               } catch (cause) {
                 setSummaryError(cause instanceof Error ? cause.message : String(cause));
               } finally {
-                setSummarizing(false);
-                onJobEnd(recording.id);
+                onJobEnd(recording.id, "summary");
               }
             }}>{summarizing ? "Summarizing…" : recording.summary ? "Summarize again" : "Summarize"}</button>
           ) : <button className="button secondary compact-button" onClick={onChooseSummaryModel}>Choose summary model</button>)}
@@ -668,17 +688,15 @@ export function RecordingDetail({ recording, deleted, whisperModelPath, summaryM
         <div className="section-heading">
           <div><h2>Transcript</h2>{recording.transcript?.language && <span>{recording.transcript.language}</span>}</div>
           {!deleted && (whisperModelPath ? (
-            <button className="button secondary compact-button" disabled={transcribing || recording.sizeBytes === 0} onClick={async () => {
-              setTranscribing(true);
+            <button className="button secondary compact-button" disabled={processing || recording.sizeBytes === 0} onClick={async () => {
+              if (!onJobStart(recording, "transcription", "Preparing audio")) return;
               setTranscriptionError(null);
-              onJobStart(recording, "Preparing audio");
               try {
                 onChanged(await api.transcribeRecording(recording.id));
               } catch (cause) {
                 setTranscriptionError(cause instanceof Error ? cause.message : String(cause));
               } finally {
-                setTranscribing(false);
-                onJobEnd(recording.id);
+                onJobEnd(recording.id, "transcription");
               }
             }}>{transcribing ? "Transcribing…" : recording.transcript ? "Transcribe again" : "Transcribe"}</button>
           ) : <button className="button secondary compact-button" onClick={onChooseWhisperModel}>Choose Whisper model</button>)}

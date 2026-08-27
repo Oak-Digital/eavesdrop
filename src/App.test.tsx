@@ -28,10 +28,11 @@ const baseProps = {
   deleted: false,
   whisperModelPath: null,
   summaryModelPath: null,
+  activity: null,
   onChooseWhisperModel: async () => undefined,
   onChooseSummaryModel: async () => undefined,
   onBack: () => undefined,
-  onJobStart: () => undefined,
+  onJobStart: () => true,
   onJobEnd: () => undefined,
   onChanged: () => undefined,
   onRemoved: () => undefined,
@@ -75,5 +76,59 @@ describe("RecordingDetail title editing", () => {
     rerender(<RecordingDetail recording={nextRecording} {...baseProps} />);
 
     expect(input.value).toBe(nextRecording.title);
+  });
+});
+
+describe("RecordingDetail processing jobs", () => {
+  const processedRecording: Recording = {
+    ...recording,
+    transcript: {
+      text: "An existing transcript.",
+      language: "English",
+      createdAt: "2026-01-01T12:31:00Z",
+      segments: [{ startMs: 0, endMs: 2_000, text: "An existing transcript." }],
+    },
+  };
+
+  it("disables both processing actions while either job is active", () => {
+    render(<RecordingDetail
+      recording={processedRecording}
+      {...baseProps}
+      whisperModelPath="/models/whisper.bin"
+      summaryModelPath="/models/summary.gguf"
+      activity={{ kind: "summary", recordingId: recording.id, title: recording.title, label: "Writing the summary", progress: 0.5 }}
+    />);
+
+    expect((screen.getByRole("button", { name: "Summarizing…" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Transcribe again" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("applies the processing lock across recordings", () => {
+    render(<RecordingDetail
+      recording={processedRecording}
+      {...baseProps}
+      whisperModelPath="/models/whisper.bin"
+      summaryModelPath="/models/summary.gguf"
+      activity={{ kind: "transcription", recordingId: "another-recording", title: "Another recording", label: "Transcribing", progress: 0.25 }}
+    />);
+
+    expect((screen.getByRole("button", { name: "Summarize" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Transcribe again" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("does not start work when the shared activity lock rejects it", () => {
+    const transcribe = vi.spyOn(api, "transcribeRecording");
+    const onJobStart = vi.fn(() => false);
+    render(<RecordingDetail
+      recording={processedRecording}
+      {...baseProps}
+      whisperModelPath="/models/whisper.bin"
+      onJobStart={onJobStart}
+    />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Transcribe again" }));
+
+    expect(onJobStart).toHaveBeenCalledWith(processedRecording, "transcription", "Preparing audio");
+    expect(transcribe).not.toHaveBeenCalled();
   });
 });
