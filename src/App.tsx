@@ -18,6 +18,7 @@ import {
   TrashIcon,
 } from "./icons";
 import type { AppSnapshot, CaptureMode, ModelDownloadStatus, Recording, SummarizationStage, SummaryModelInfo, TranscriptionStage, WhisperModelInfo } from "./types";
+import { libraryRecordingAction } from "./recordingAction";
 import { useAppState } from "./useAppState";
 import { useUpdater } from "./useUpdater";
 
@@ -184,6 +185,7 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
+  const [startingFromLibrary, setStartingFromLibrary] = useState(false);
   const [activity, setActivity] = useState<ActivityState | null>(null);
   const models = useModelManager(app);
 
@@ -294,6 +296,24 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
     }
   };
 
+  const recordingAction = startingFromLibrary
+    ? { kind: "pending" as const, label: "Starting…" }
+    : libraryRecordingAction(app.snapshot?.session.phase ?? "idle");
+
+  const handleRecordingAction = async () => {
+    if (recordingAction.kind === "open") {
+      await app.showQuickPanel();
+      return;
+    }
+    if (recordingAction.kind !== "start") return;
+    setStartingFromLibrary(true);
+    try {
+      await app.start({ mode: "online" });
+    } finally {
+      setStartingFromLibrary(false);
+    }
+  };
+
   if (!app.snapshot) return null;
   if (!app.snapshot.settings.onboardingCompleted) {
     return <Onboarding app={app} />;
@@ -360,7 +380,13 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
                 ) : (
                   <>
                     {recordings.length > 0 && <button className="button secondary" onClick={() => { setSelected(null); setSelectionMode(true); }}>Select</button>}
-                    {page === "recordings" && <button className="button primary" onClick={() => app.start({ mode: "online" })}><span className="button-record-dot" /> Start recording</button>}
+                    {page === "recordings" && (
+                      <button className="button primary" disabled={recordingAction.kind === "pending"} onClick={handleRecordingAction}>
+                        {(recordingAction.kind === "start" || app.snapshot.session.phase === "recording") && <span className="button-record-dot" />}
+                        {app.snapshot.session.phase === "paused" && <PauseIcon />}
+                        {recordingAction.label}
+                      </button>
+                    )}
                   </>
                 )}
               </div>
@@ -533,42 +559,62 @@ function RecordingList({ items, loading, deleted, selectionMode, selectedIds, on
   );
 }
 
-function RecordingDetail({ recording, deleted, whisperModelPath, summaryModelPath, onChooseWhisperModel, onChooseSummaryModel, onBack, onJobStart, onJobEnd, onChanged, onRemoved }: { recording: Recording; deleted: boolean; whisperModelPath: string | null; summaryModelPath: string | null; onChooseWhisperModel: () => Promise<void>; onChooseSummaryModel: () => Promise<void>; onBack: () => void; onJobStart: (item: Recording, label: string) => void; onJobEnd: (id: string) => void; onChanged: (item: Recording) => void; onRemoved: () => void }) {
+export function RecordingDetail({ recording, deleted, whisperModelPath, summaryModelPath, onChooseWhisperModel, onChooseSummaryModel, onBack, onJobStart, onJobEnd, onChanged, onRemoved }: { recording: Recording; deleted: boolean; whisperModelPath: string | null; summaryModelPath: string | null; onChooseWhisperModel: () => Promise<void>; onChooseSummaryModel: () => Promise<void>; onBack: () => void; onJobStart: (item: Recording, label: string) => void; onJobEnd: (id: string) => void; onChanged: (item: Recording) => void; onRemoved: () => void }) {
   const [title, setTitle] = useState(recording.title);
   const [busy, setBusy] = useState(false);
+  const [titleError, setTitleError] = useState<string | null>(null);
   const [transcribing, setTranscribing] = useState(false);
   const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
   const [summarizing, setSummarizing] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
-  const rename = async (next: string) => onChanged(await api.renameRecording(recording.id, next));
-  const saveTitle = async () => {
-    const trimmed = title.trim();
-    if (!trimmed || trimmed === recording.title) return;
-    setBusy(true);
-    await rename(trimmed);
-    setBusy(false);
-  };
-  // The title input is uncontrolled across recordings, so accepting a suggested
-  // title has to move the field too, not just the stored recording.
-  const useSuggestedTitle = async (suggested: string) => {
-    setBusy(true);
-    setTitle(suggested);
-    try {
-      await rename(suggested);
-    } catch (cause) {
-      setSummaryError(cause instanceof Error ? cause.message : String(cause));
+  useEffect(() => {
+    setTitle(recording.title);
+    setTitleError(null);
+  }, [recording.id, recording.title]);
+
+  const saveTitle = async (next = title) => {
+    if (busy) return;
+    const trimmed = next.trim();
+    setTitleError(null);
+    if (!trimmed || trimmed === recording.title) {
       setTitle(recording.title);
+      return;
+    }
+    setBusy(true);
+    try {
+      const renamed = await api.renameRecording(recording.id, trimmed);
+      setTitle(renamed.title);
+      onChanged(renamed);
+    } catch (cause) {
+      setTitle(recording.title);
+      setTitleError(cause instanceof Error ? cause.message : "The title could not be saved.");
     } finally {
       setBusy(false);
     }
+  };
+
+  const useSuggestedTitle = async (suggested: string) => {
+    setTitle(suggested);
+    await saveTitle(suggested);
   };
   return (
     <div className="recording-detail">
       <header className="detail-header">
         <button className="icon-button" onClick={onBack} aria-label="Back"><ChevronLeftIcon /></button>
         <div className="title-editor">
-          <input value={title} onChange={(event) => setTitle(event.target.value)} onBlur={saveTitle} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} aria-label="Recording title" />
+          <input
+            value={title}
+            readOnly={busy}
+            aria-busy={busy}
+            aria-invalid={titleError ? true : undefined}
+            aria-describedby={titleError ? "recording-title-error" : undefined}
+            onChange={(event) => { setTitle(event.target.value); setTitleError(null); }}
+            onBlur={() => { void saveTitle(); }}
+            onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
+            aria-label="Recording title"
+          />
           <span>{formatDate(recording.startedAt)} · {formatDuration(recording.playableDurationMs)} · {formatSize(recording.sizeBytes)}</span>
+          {titleError && <span className="title-error" id="recording-title-error" role="alert">{titleError}</span>}
         </div>
         {!deleted && <button className="button primary" onClick={() => api.exportRecording(recording)}><ExportIcon /> Export M4A</button>}
         {deleted && <button className="button primary" onClick={async () => { await api.restoreRecording(recording.id); onRemoved(); }}>Restore</button>}

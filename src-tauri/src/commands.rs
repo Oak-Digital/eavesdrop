@@ -235,6 +235,35 @@ pub fn open_library(app: AppHandle, recording_id: Option<String>) -> AppResult<(
 }
 
 #[tauri::command]
+pub fn show_quick_panel(app: AppHandle) -> AppResult<()> {
+    let quick = app
+        .get_webview_window("quick_panel")
+        .ok_or_else(|| AppError::Other("quick recorder window is unavailable".into()))?;
+
+    if let Some(main) = app.get_webview_window("main")
+        && let (Ok(position), Ok(main_size), Ok(quick_size)) =
+            (main.outer_position(), main.outer_size(), quick.outer_size())
+    {
+        let scale = main.scale_factor().unwrap_or(1.0);
+        let margin = (16.0 * scale).round() as i32;
+        let top_offset = (44.0 * scale).round() as i32;
+        let x = position.x + main_size.width as i32 - quick_size.width as i32 - margin;
+        let y = position.y + top_offset;
+        let _ = quick.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+            x, y,
+        )));
+    }
+
+    quick
+        .show()
+        .map_err(|error| AppError::Other(error.to_string()))?;
+    quick
+        .set_focus()
+        .map_err(|error| AppError::Other(error.to_string()))?;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn hide_quick_panel(app: AppHandle) -> AppResult<()> {
     if let Some(window) = app.get_webview_window("quick_panel") {
         window

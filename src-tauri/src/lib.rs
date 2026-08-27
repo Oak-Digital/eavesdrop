@@ -62,6 +62,7 @@ pub fn run() {
             commands::remove_summary_model,
             commands::use_summary_model,
             commands::open_library,
+            commands::show_quick_panel,
             commands::hide_quick_panel,
             commands::begin_update_install,
             commands::cancel_update_install,

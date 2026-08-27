@@ -1,14 +1,19 @@
 // @vitest-environment jsdom
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  addHighlight,
   deleteRecordings,
   getSnapshot,
   installWhisperModel,
   listRecordings,
   listWhisperModels,
+  onRecordingFinalized,
+  onSessionChanged,
+  pauseRecording,
   resetBrowserMock,
   removeWhisperModel,
+  resumeRecording,
   restoreRecordings,
   startRecording,
   stopRecording,
@@ -16,6 +21,58 @@ import {
   updateSettings,
   useWhisperModel,
 } from "./api";
+
+describe("browser recording lifecycle", () => {
+  beforeEach(() => {
+    resetBrowserMock();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T12:00:00Z"));
+  });
+
+  afterEach(() => vi.useRealTimers());
+
+  it("preserves playable time across pause and resume", async () => {
+    await startRecording({ mode: "online" });
+    vi.advanceTimersByTime(2_500);
+
+    const paused = await pauseRecording();
+    expect(paused.elapsedMs).toBe(2_500);
+    expect(paused.playableMs).toBe(2_500);
+
+    vi.advanceTimersByTime(1_500);
+    const resumed = await resumeRecording();
+    expect(resumed.elapsedMs).toBe(4_000);
+    expect(resumed.playableMs).toBe(2_500);
+
+    vi.advanceTimersByTime(1_000);
+    await addHighlight();
+    const recording = await stopRecording();
+
+    expect(recording.durationMs).toBe(5_000);
+    expect(recording.playableDurationMs).toBe(3_500);
+    expect(recording.highlights[0]?.offsetMs).toBe(3_500);
+  });
+
+  it("emits the desktop lifecycle events and returns to idle after stopping", async () => {
+    const phases: string[] = [];
+    const finalized: string[] = [];
+    const stopSessionListener = await onSessionChanged((session) => phases.push(session.phase));
+    const stopFinalizedListener = await onRecordingFinalized((recording) => finalized.push(recording.id));
+
+    const started = await startRecording({ mode: "in_person" });
+    await pauseRecording();
+    await resumeRecording();
+    const recording = await stopRecording();
+
+    expect(recording.id).toBe(started.recordingId);
+    expect(phases).toEqual(["recording", "paused", "recording", "finalizing", "idle"]);
+    expect(finalized).toEqual([recording.id]);
+    expect((await getSnapshot()).session.phase).toBe("idle");
+
+    stopSessionListener();
+    stopFinalizedListener();
+  });
+});
 
 describe("bulk recording actions", () => {
   beforeEach(resetBrowserMock);

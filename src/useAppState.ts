@@ -115,6 +115,7 @@ export function useAppState() {
     resume: async () => setSession(await run(api.resumeRecording)),
     highlight: async () => setSession(await run(api.addHighlight)),
     stop: async () => run(api.stopRecording),
+    showQuickPanel: async () => { await run(api.showQuickPanel); },
     dismissMeeting: async () => {
       if (meeting) await run(() => api.dismissMeeting(meeting.id));
       setMeeting(null);

@@ -163,6 +163,7 @@ h1, h2, h3 { letter-spacing: -0.018em; }
 .title-editor { min-width: 0; display: grid; gap: 2px; }
 .title-editor input { min-width: 0; border: 0; outline: 0; padding: 0; background: transparent; color: var(--text-primary); font-size: 15px; line-height: 1.35; font-weight: 560; letter-spacing: -.018em; }
 .title-editor span { color: var(--text-secondary); font-size: 11px; }
+.title-editor .title-error { color: var(--danger); }
 
 .player-stack { margin: 20px 24px 8px; }
 .player { height: 72px; display: flex; align-items: center; gap: 11px; padding: 0 14px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-surface); }

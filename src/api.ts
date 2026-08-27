@@ -52,6 +52,27 @@ let browserSnapshot = structuredClone(mockSnapshot);
 let browserRecordings: Recording[] = [];
 let browserInstalledWhisperModels = new Set<string>();
 let browserInstalledSummaryModels = new Set<string>();
+let browserRecordingClock: { startedAtMs: number; pausedAtMs: number | null; pausedTotalMs: number } | null = null;
+let browserHighlights: Recording["highlights"] = [];
+const browserSessionListeners = new Set<(session: RecordingSession) => void>();
+const browserRecordingFinalizedListeners = new Set<(recording: Recording) => void>();
+
+function updateBrowserSessionTiming(now = Date.now()) {
+  if (!browserRecordingClock) return;
+  const elapsedMs = Math.max(0, now - browserRecordingClock.startedAtMs);
+  const currentPauseMs = browserRecordingClock.pausedAtMs === null ? 0 : Math.max(0, now - browserRecordingClock.pausedAtMs);
+  browserSnapshot.session.elapsedMs = elapsedMs;
+  browserSnapshot.session.playableMs = Math.max(0, elapsedMs - browserRecordingClock.pausedTotalMs - currentPauseMs);
+}
+
+function emitBrowserSession() {
+  const session = structuredClone(browserSnapshot.session);
+  browserSessionListeners.forEach((handler) => handler(structuredClone(session)));
+}
+
+function emitBrowserRecordingFinalized(recording: Recording) {
+  browserRecordingFinalizedListeners.forEach((handler) => handler(structuredClone(recording)));
+}
 
 async function command<T>(name: string, args?: Record<string, unknown>): Promise<T> {
   if (!isTauri()) throw new Error(`Command ${name} is only available in the desktop app`);
@@ -59,7 +80,9 @@ async function command<T>(name: string, args?: Record<string, unknown>): Promise
 }
 
 export async function getSnapshot(): Promise<AppSnapshot> {
-  return isTauri() ? command<AppSnapshot>("get_app_snapshot") : structuredClone(browserSnapshot);
+  if (isTauri()) return command<AppSnapshot>("get_app_snapshot");
+  updateBrowserSessionTiming();
+  return structuredClone(browserSnapshot);
 }
 
 export async function requestPermissions(): Promise<AppSnapshot> {
@@ -82,42 +105,78 @@ export async function updateSettings(settings: Partial<AppSettings>): Promise<Ap
 
 export async function startRecording(input: StartRecordingInput): Promise<RecordingSession> {
   if (isTauri()) return command<RecordingSession>("start_recording", { input });
+  if (["starting", "recording", "paused", "finalizing"].includes(browserSnapshot.session.phase)) {
+    throw new Error("a recording is already active");
+  }
+  const startedAtMs = Date.now();
+  browserRecordingClock = { startedAtMs, pausedAtMs: null, pausedTotalMs: 0 };
+  browserHighlights = [];
   browserSnapshot.session = {
     ...idleSession,
     phase: "recording",
     recordingId: crypto.randomUUID(),
     mode: input.mode,
-    startedAt: new Date().toISOString(),
+    startedAt: new Date(startedAtMs).toISOString(),
   };
+  emitBrowserSession();
   return structuredClone(browserSnapshot.session);
 }
 
 export async function pauseRecording(): Promise<RecordingSession> {
   if (isTauri()) return command<RecordingSession>("pause_recording");
+  if (browserSnapshot.session.phase !== "recording" || !browserRecordingClock) {
+    throw new Error("recording is not active");
+  }
+  const now = Date.now();
+  updateBrowserSessionTiming(now);
+  browserRecordingClock.pausedAtMs = now;
   browserSnapshot.session.phase = "paused";
+  emitBrowserSession();
   return structuredClone(browserSnapshot.session);
 }
 
 export async function resumeRecording(): Promise<RecordingSession> {
   if (isTauri()) return command<RecordingSession>("resume_recording");
+  if (browserSnapshot.session.phase !== "paused" || !browserRecordingClock || browserRecordingClock.pausedAtMs === null) {
+    throw new Error("recording is not paused");
+  }
+  const now = Date.now();
+  browserRecordingClock.pausedTotalMs += Math.max(0, now - browserRecordingClock.pausedAtMs);
+  browserRecordingClock.pausedAtMs = null;
   browserSnapshot.session.phase = "recording";
+  updateBrowserSessionTiming(now);
+  emitBrowserSession();
   return structuredClone(browserSnapshot.session);
 }
 
 export async function addHighlight(): Promise<RecordingSession> {
   if (isTauri()) return command<RecordingSession>("add_highlight");
+  if (browserSnapshot.session.phase !== "recording") throw new Error("resume before adding a highlight");
+  updateBrowserSessionTiming();
+  browserHighlights.push({
+    id: crypto.randomUUID(),
+    offsetMs: browserSnapshot.session.playableMs,
+    createdAt: new Date().toISOString(),
+  });
+  emitBrowserSession();
   return structuredClone(browserSnapshot.session);
 }
 
 export async function stopRecording(): Promise<Recording> {
   if (isTauri()) return command<Recording>("stop_recording");
-  const now = new Date().toISOString();
+  if (!["recording", "paused"].includes(browserSnapshot.session.phase) || !browserRecordingClock) {
+    throw new Error("no recording is active");
+  }
+  const stoppedAtMs = Date.now();
+  updateBrowserSessionTiming(stoppedAtMs);
+  browserSnapshot.session.phase = "finalizing";
+  emitBrowserSession();
   const recording: Recording = {
     id: browserSnapshot.session.recordingId!,
     title: `${browserSnapshot.session.mode === "online" ? "Online" : "In-person"} meeting`,
     mode: browserSnapshot.session.mode!,
     startedAt: browserSnapshot.session.startedAt!,
-    endedAt: now,
+    endedAt: new Date(stoppedAtMs).toISOString(),
     durationMs: browserSnapshot.session.elapsedMs,
     playableDurationMs: browserSnapshot.session.playableMs,
     status: "ready",
@@ -125,13 +184,17 @@ export async function stopRecording(): Promise<Recording> {
     codec: "AAC-LC",
     detectedApp: null,
     deletedAt: null,
-    highlights: [],
+    highlights: structuredClone(browserHighlights),
     transcript: null,
     summary: null,
   };
   browserRecordings.unshift(recording);
   browserSnapshot.session = structuredClone(idleSession);
-  return recording;
+  browserRecordingClock = null;
+  browserHighlights = [];
+  emitBrowserSession();
+  emitBrowserRecordingFinalized(recording);
+  return structuredClone(recording);
 }
 
 export async function listRecordings(includeDeleted = false): Promise<Recording[]> {
@@ -351,6 +414,10 @@ export async function openLibrary(recordingId?: string): Promise<void> {
   if (isTauri()) await command<void>("open_library", { recordingId });
 }
 
+export async function showQuickPanel(): Promise<void> {
+  if (isTauri()) await command<void>("show_quick_panel");
+}
+
 export async function hideQuickPanel(): Promise<void> {
   if (isTauri()) await command<void>("hide_quick_panel");
 }
@@ -364,7 +431,10 @@ export async function cancelUpdateInstall(): Promise<void> {
 }
 
 export async function onSessionChanged(handler: (session: RecordingSession) => void): Promise<UnlistenFn> {
-  if (!isTauri()) return () => undefined;
+  if (!isTauri()) {
+    browserSessionListeners.add(handler);
+    return () => browserSessionListeners.delete(handler);
+  }
   return listen<RecordingSession>("recording-state-changed", (event) => handler(event.payload));
 }
 
@@ -374,7 +444,10 @@ export async function onAudioLevels(handler: (levels: AudioLevels) => void): Pro
 }
 
 export async function onRecordingFinalized(handler: (recording: Recording) => void): Promise<UnlistenFn> {
-  if (!isTauri()) return () => undefined;
+  if (!isTauri()) {
+    browserRecordingFinalizedListeners.add(handler);
+    return () => browserRecordingFinalizedListeners.delete(handler);
+  }
   return listen<Recording>("recording-finalized", (event) => handler(event.payload));
 }
 
@@ -403,4 +476,8 @@ export function resetBrowserMock() {
   browserRecordings = [];
   browserInstalledWhisperModels = new Set();
   browserInstalledSummaryModels = new Set();
+  browserRecordingClock = null;
+  browserHighlights = [];
+  browserSessionListeners.clear();
+  browserRecordingFinalizedListeners.clear();
 }
