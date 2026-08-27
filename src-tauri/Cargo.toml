@@ -1,6 +1,6 @@
 [package]
 name = "eavesdrop"
-version = "0.1.19"
+version = "0.1.20"
 description = "A private cross-platform meeting recorder"
 authors = ["Eavesdrop"]
 edition = "2024"

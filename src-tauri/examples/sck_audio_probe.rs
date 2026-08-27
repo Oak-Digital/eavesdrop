@@ -51,7 +51,7 @@ fn main() {
         .expect("at least one display");
     let filter = SCContentFilter::create()
         .with_display(&display)
-        .with_excluding_windows(&[])
+        .with_excluding_applications(&[], &[])
         .build();
     let config = SCStreamConfiguration::new()
         .with_width(2)

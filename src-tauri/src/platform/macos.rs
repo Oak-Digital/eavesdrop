@@ -38,7 +38,10 @@ impl CaptureBackend for MacCaptureBackend {
             })?;
             let filter = SCContentFilter::create()
                 .with_display(&display)
-                .with_excluding_windows(&[])
+                // ScreenCaptureKit filters audio at the application level. Using
+                // the window-only display initializer can omit audio produced by
+                // helper processes, which Teams uses for meeting playback.
+                .with_excluding_applications(&[], &[])
                 .build();
             let config = SCStreamConfiguration::new()
                 .with_width(2)
@@ -49,31 +52,35 @@ impl CaptureBackend for MacCaptureBackend {
                 .with_channel_count(1);
             let mut stream = SCStream::new(&filter, &config);
             let audio_sender = sender.clone();
-            stream.add_output_handler(
-                move |sample: CMSampleBuffer, output_type| {
-                    if output_type != SCStreamOutputType::Audio {
-                        return;
-                    }
-                    let Some(buffers) = sample.audio_buffer_list() else {
-                        return;
-                    };
-                    for buffer in buffers.iter() {
-                        let samples: Vec<f32> = buffer
-                            .data()
-                            .chunks_exact(4)
-                            .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
-                            .collect();
-                        send_pcm(
-                            &audio_sender,
-                            SourceKind::System,
-                            &samples,
-                            buffer.number_channels.max(1) as usize,
-                            48_000,
-                        );
-                    }
-                },
-                SCStreamOutputType::Audio,
-            );
+            stream
+                .add_output_handler(
+                    move |sample: CMSampleBuffer, output_type| {
+                        if output_type != SCStreamOutputType::Audio {
+                            return;
+                        }
+                        let Some(buffers) = sample.audio_buffer_list() else {
+                            return;
+                        };
+                        for buffer in buffers.iter() {
+                            let samples: Vec<f32> = buffer
+                                .data()
+                                .chunks_exact(4)
+                                .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
+                                .collect();
+                            send_pcm(
+                                &audio_sender,
+                                SourceKind::System,
+                                &samples,
+                                buffer.number_channels.max(1) as usize,
+                                48_000,
+                            );
+                        }
+                    },
+                    SCStreamOutputType::Audio,
+                )
+                .ok_or_else(|| {
+                    AppError::Audio("computer audio output could not be registered".into())
+                })?;
             stream.start_capture().map_err(|error| {
                 AppError::Permission(format!("computer audio permission is required: {error}"))
             })?;

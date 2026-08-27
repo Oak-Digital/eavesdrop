@@ -129,12 +129,22 @@ pub fn run() {
                 let _ = window.hide();
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Eavesdrop");
+        .build(tauri::generate_context!())
+        .expect("error while building Eavesdrop")
+        .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event {
+                show_library(app);
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }
 
 fn show_library(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
     }
@@ -224,6 +234,13 @@ mod tests {
         let config = include_str!("../tauri.conf.json");
         assert!(config.contains("icons/icon.icns"));
         assert!(config.contains("icons/icon.ico"));
+    }
+
+    #[test]
+    fn macos_system_audio_uses_an_application_level_filter() {
+        let backend = include_str!("platform/macos.rs");
+        assert!(backend.contains(".with_excluding_applications(&[], &[])"));
+        assert!(!backend.contains(".with_excluding_windows(&[])"));
     }
 
     #[test]
