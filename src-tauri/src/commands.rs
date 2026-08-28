@@ -275,6 +275,33 @@ pub fn hide_quick_panel(app: AppHandle) -> AppResult<()> {
 }
 
 #[tauri::command]
+pub fn resize_quick_panel(app: AppHandle, height: f64) -> AppResult<()> {
+    let quick = app
+        .get_webview_window("quick_panel")
+        .ok_or_else(|| AppError::Other("quick recorder window is unavailable".into()))?;
+    let height = normalized_quick_panel_height(height);
+    let scale = quick
+        .scale_factor()
+        .map_err(|error| AppError::Other(error.to_string()))?;
+    let width = quick
+        .inner_size()
+        .map_err(|error| AppError::Other(error.to_string()))?
+        .width as f64
+        / scale;
+    quick
+        .set_size(tauri::Size::Logical(tauri::LogicalSize::new(width, height)))
+        .map_err(|error| AppError::Other(error.to_string()))
+}
+
+fn normalized_quick_panel_height(height: f64) -> f64 {
+    if height.is_finite() {
+        height.clamp(180.0, 520.0)
+    } else {
+        330.0
+    }
+}
+
+#[tauri::command]
 pub fn begin_update_install(state: State<'_, AppState>) -> AppResult<()> {
     state.begin_update_install()
 }
@@ -312,4 +339,17 @@ fn apply_autostart(app: &AppHandle, enabled: bool) -> AppResult<()> {
         app.autolaunch().disable()
     }
     .map_err(|error| AppError::Other(error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalized_quick_panel_height;
+
+    #[test]
+    fn quick_panel_height_is_bounded_and_rejects_invalid_values() {
+        assert_eq!(normalized_quick_panel_height(296.0), 296.0);
+        assert_eq!(normalized_quick_panel_height(20.0), 180.0);
+        assert_eq!(normalized_quick_panel_height(900.0), 520.0);
+        assert_eq!(normalized_quick_panel_height(f64::NAN), 330.0);
+    }
 }

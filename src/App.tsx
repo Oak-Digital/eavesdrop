@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import * as api from "./api";
 import { formatDate, formatDuration, formatSize, transcriptionPercentage } from "./format";
@@ -54,11 +54,13 @@ type AppUpdater = ReturnType<typeof useUpdater>;
 
 function QuickPanel({ app }: { app: AppController }) {
   const { snapshot, meeting } = app;
+  const panelRef = useRef<HTMLElement>(null);
+  useFitQuickPanelToContent(panelRef);
   if (!snapshot) return null;
   const active = ["recording", "paused", "starting", "finalizing"].includes(snapshot.session.phase);
 
   return (
-    <main className="quick-panel">
+    <main className="quick-panel" ref={panelRef}>
       <div className="quick-drag-region" onMouseDown={beginWindowDrag}>
         <div className="wordmark"><BrandMark active={active} /> Eavesdrop</div>
         <button className="icon-button compact" onClick={() => api.hideQuickPanel()} aria-label="Close recorder">×</button>
@@ -79,6 +81,33 @@ function QuickPanel({ app }: { app: AppController }) {
       </button>
     </main>
   );
+}
+
+function useFitQuickPanelToContent(panelRef: React.RefObject<HTMLElement | null>) {
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    if (!panel || !("__TAURI_INTERNALS__" in window)) return;
+
+    let frame = 0;
+    let lastHeight = 0;
+    const fit = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        const height = Math.ceil(panel.getBoundingClientRect().height);
+        if (height === lastHeight) return;
+        lastHeight = height;
+        void api.resizeQuickPanel(height);
+      });
+    };
+    const observer = new ResizeObserver(fit);
+    observer.observe(panel);
+    fit();
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [panelRef]);
 }
 
 function IdleRecorder({ snapshot, onStart }: { snapshot: AppSnapshot; onStart: AppController["start"] }) {

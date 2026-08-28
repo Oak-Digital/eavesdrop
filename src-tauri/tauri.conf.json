@@ -30,7 +30,7 @@
         "title": "Eavesdrop recorder",
         "url": "/?surface=quick",
         "width": 360,
-        "height": 410,
+        "height": 330,
         "visible": false,
         "resizable": false,
         "maximizable": false,

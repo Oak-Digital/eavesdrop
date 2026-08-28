@@ -311,12 +311,12 @@ h1, h2, h3 { letter-spacing: -0.018em; }
 .summary-prompt-actions { display: flex; justify-content: flex-end; gap: 7px; }
 .summary-prompt-actions .button { margin: 0; }
 
-.quick-panel { width: 360px; min-height: 100vh; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border-strong); background: var(--bg-base); box-shadow: var(--shadow-popover); }
+.quick-panel { width: 360px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border-strong); background: var(--bg-base); box-shadow: var(--shadow-popover); }
 .quick-drag-region { height: 44px; display: flex; align-items: center; justify-content: space-between; padding: 0 8px 0 10px; border-bottom: 1px solid var(--border-subtle); -webkit-app-region: drag; }
 .quick-drag-region .wordmark { height: auto; padding: 0; font-size: 13px; }
 .quick-drag-region .brand-mark { width: 22px; height: 22px; border-radius: 6px; }
 .quick-drag-region button { -webkit-app-region: no-drag; }
-.quick-content { flex: 1; padding: 18px; }
+.quick-content { padding: 18px; }
 .source-status { display: flex; align-items: center; gap: 7px; overflow: hidden; color: var(--text-secondary); font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }
 .status-ok, .status-warn { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--success); }
 .status-warn { background: var(--warning); }

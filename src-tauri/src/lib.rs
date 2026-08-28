@@ -64,6 +64,7 @@ pub fn run() {
             commands::open_library,
             commands::show_quick_panel,
             commands::hide_quick_panel,
+            commands::resize_quick_panel,
             commands::begin_update_install,
             commands::cancel_update_install,
             commands::dismiss_meeting,
@@ -122,6 +123,20 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Focused(focused) = event
+                && should_hide_quick_panel(window.label(), *focused)
+            {
+                let window = window.clone();
+                // A menu-bar click briefly removes focus before the tray click
+                // handler runs. Rechecking prevents that event from reopening a
+                // panel the user intended to toggle closed.
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(80));
+                    if !window.is_focused().unwrap_or(false) {
+                        let _ = window.hide();
+                    }
+                });
+            }
             if window.label() == "main"
                 && let tauri::WindowEvent::CloseRequested { api, .. } = event
             {
@@ -140,6 +155,10 @@ pub fn run() {
             #[cfg(not(target_os = "macos"))]
             let _ = (app, event);
         });
+}
+
+fn should_hide_quick_panel(label: &str, focused: bool) -> bool {
+    label == "quick_panel" && !focused
 }
 
 fn show_library(app: &tauri::AppHandle) {
@@ -217,6 +236,15 @@ pub(crate) fn update_tray(app: &tauri::AppHandle, recording: bool) {
 
 #[cfg(test)]
 mod tests {
+    use super::should_hide_quick_panel;
+
+    #[test]
+    fn quick_panel_hides_only_when_it_loses_focus() {
+        assert!(should_hide_quick_panel("quick_panel", false));
+        assert!(!should_hide_quick_panel("quick_panel", true));
+        assert!(!should_hide_quick_panel("main", false));
+    }
+
     #[test]
     fn content_policy_allows_in_memory_audio_playback() {
         let config = include_str!("../tauri.conf.json");

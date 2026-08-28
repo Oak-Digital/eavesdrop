@@ -423,6 +423,10 @@ export async function hideQuickPanel(): Promise<void> {
   if (isTauri()) await command<void>("hide_quick_panel");
 }
 
+export async function resizeQuickPanel(height: number): Promise<void> {
+  if (isTauri()) await command<void>("resize_quick_panel", { height });
+}
+
 export async function beginUpdateInstall(): Promise<void> {
   if (isTauri()) await command<void>("begin_update_install");
 }
