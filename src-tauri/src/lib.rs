@@ -7,6 +7,7 @@ mod diagnostics;
 mod download;
 mod error;
 mod models;
+mod oakos;
 mod platform;
 mod state;
 mod storage;
@@ -61,6 +62,11 @@ pub fn run() {
             commands::install_summary_model,
             commands::remove_summary_model,
             commands::use_summary_model,
+            commands::get_oakos_integration,
+            commands::connect_oakos,
+            commands::disconnect_oakos,
+            commands::list_oakos_projects,
+            commands::publish_recording_to_oakos,
             commands::open_library,
             commands::show_quick_panel,
             commands::hide_quick_panel,

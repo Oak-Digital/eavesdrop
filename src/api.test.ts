@@ -3,14 +3,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addHighlight,
+  connectOakOs,
   deleteRecordings,
+  disconnectOakOs,
   getSnapshot,
   installWhisperModel,
   listRecordings,
+  listOakOsProjects,
   listWhisperModels,
   onRecordingFinalized,
   onSessionChanged,
   pauseRecording,
+  publishRecordingToOakOs,
   resetBrowserMock,
   removeWhisperModel,
   resumeRecording,
@@ -108,6 +112,29 @@ describe("appearance settings", () => {
   it("stores a light theme preference", async () => {
     await updateSettings({ theme: "light" });
     expect((await getSnapshot()).settings.theme).toBe("light");
+  });
+});
+
+describe("OakOS integration", () => {
+  beforeEach(resetBrowserMock);
+
+  it("connects, selects a project, and publishes a recording", async () => {
+    await connectOakOs("oakos_pat_test");
+    const [project] = await listOakOsProjects();
+    await startRecording({ mode: "online" });
+    const recording = await stopRecording();
+
+    await expect(publishRecordingToOakOs(recording.id, project.id)).resolves.toEqual({
+      location: `/api/v1/recordings/${recording.id}`,
+    });
+  });
+
+  it("removes access to projects when disconnected", async () => {
+    await connectOakOs("oakos_pat_test");
+
+    await disconnectOakOs();
+
+    await expect(listOakOsProjects()).rejects.toThrow("OakOS is not connected");
   });
 });
 

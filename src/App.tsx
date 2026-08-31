@@ -6,6 +6,7 @@ import {
   ChevronLeftIcon,
   ComputerIcon,
   ExportIcon,
+  IntegrationsIcon,
   MarkerIcon,
   MicIcon,
   MoreIcon,
@@ -17,13 +18,13 @@ import {
   StopIcon,
   TrashIcon,
 } from "./icons";
-import type { AppSnapshot, CaptureMode, ModelDownloadStatus, Recording, SummarizationStage, SummaryModelInfo, TranscriptionStage, WhisperModelInfo } from "./types";
+import type { AppSnapshot, CaptureMode, ModelDownloadStatus, OakOsProject, Recording, SummarizationStage, SummaryModelInfo, TranscriptionStage, WhisperModelInfo } from "./types";
 import { libraryRecordingAction } from "./recordingAction";
 import { applyTheme } from "./theme";
 import { useAppState } from "./useAppState";
 import { useUpdater } from "./useUpdater";
 
-type LibraryPage = "recordings" | "deleted" | "settings";
+type LibraryPage = "recordings" | "deleted" | "integrations" | "settings";
 const isMac = /Macintosh|Mac OS X/.test(navigator.userAgent);
 const DEFAULT_SUMMARY_PROMPT = "Summarize the meeting clearly and concisely. Focus on the topics discussed, decisions reached, and tasks assigned, including who owns them.";
 
@@ -380,6 +381,7 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
         <nav aria-label="Library">
           <button className={page === "recordings" ? "active" : ""} onClick={() => { setPage("recordings"); setSelected(null); }}><RecordingsIcon /> Recordings</button>
           <button className={page === "deleted" ? "active" : ""} onClick={() => { setPage("deleted"); setSelected(null); }}><TrashIcon /> Recently deleted</button>
+          <button className={page === "integrations" ? "active" : ""} onClick={() => { setPage("integrations"); setSelected(null); }}><IntegrationsIcon /> Integrations</button>
         </nav>
         <div className="sidebar-bottom">
           {models.download && <ModelDownloadProgressCard models={models} />}
@@ -399,6 +401,7 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
             deleted={page === "deleted"}
             whisperModelPath={app.snapshot.settings.whisperModelPath}
             summaryModelPath={app.snapshot.settings.summaryModelPath}
+            onOpenIntegrations={() => { setSelected(null); setPage("integrations"); }}
             activity={activity}
             onChooseWhisperModel={async () => {
               const path = await api.selectWhisperModel();
@@ -417,6 +420,8 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
             }}
             onRemoved={async () => { setSelected(null); await reload(); }}
           />
+        ) : page === "integrations" ? (
+          <IntegrationsPage app={app} />
         ) : page === "settings" ? (
           <SettingsPage app={app} updater={updater} models={models} />
         ) : (
@@ -614,12 +619,19 @@ function RecordingList({ items, loading, deleted, selectionMode, selectedIds, on
   );
 }
 
-export function RecordingDetail({ recording, deleted, whisperModelPath, summaryModelPath, activity, onChooseWhisperModel, onChooseSummaryModel, onBack, onJobStart, onJobEnd, onChanged, onRemoved }: { recording: Recording; deleted: boolean; whisperModelPath: string | null; summaryModelPath: string | null; activity: ActivityState | null; onChooseWhisperModel: () => Promise<void>; onChooseSummaryModel: () => Promise<void>; onBack: () => void; onJobStart: (item: Recording, kind: ActivityKind, label: string) => boolean; onJobEnd: (id: string, kind: ActivityKind) => void; onChanged: (item: Recording) => void; onRemoved: () => void }) {
+export function RecordingDetail({ recording, deleted, whisperModelPath, summaryModelPath, activity, onChooseWhisperModel, onChooseSummaryModel, onOpenIntegrations, onBack, onJobStart, onJobEnd, onChanged, onRemoved }: { recording: Recording; deleted: boolean; whisperModelPath: string | null; summaryModelPath: string | null; activity: ActivityState | null; onChooseWhisperModel: () => Promise<void>; onChooseSummaryModel: () => Promise<void>; onOpenIntegrations?: () => void; onBack: () => void; onJobStart: (item: Recording, kind: ActivityKind, label: string) => boolean; onJobEnd: (id: string, kind: ActivityKind) => void; onChanged: (item: Recording) => void; onRemoved: () => void }) {
   const [title, setTitle] = useState(recording.title);
   const [busy, setBusy] = useState(false);
   const [titleError, setTitleError] = useState<string | null>(null);
   const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
   const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [loadingPublishProjects, setLoadingPublishProjects] = useState(false);
+  const [publishDialogOpen, setPublishDialogOpen] = useState(false);
+  const [publishProjects, setPublishProjects] = useState<OakOsProject[]>([]);
+  const [publishProjectId, setPublishProjectId] = useState("");
+  const [publishDialogError, setPublishDialogError] = useState<string | null>(null);
+  const [publishing, setPublishing] = useState(false);
+  const [publishMessage, setPublishMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const transcribing = activity?.kind === "transcription" && activity.recordingId === recording.id;
   const summarizing = activity?.kind === "summary" && activity.recordingId === recording.id;
   const processing = activity !== null;
@@ -653,6 +665,45 @@ export function RecordingDetail({ recording, deleted, whisperModelPath, summaryM
     setTitle(suggested);
     await saveTitle(suggested);
   };
+
+  const choosePublishProject = async () => {
+    setLoadingPublishProjects(true);
+    setPublishMessage(null);
+    try {
+      const integration = await api.getOakOsIntegration();
+      if (!integration.connected) {
+        onOpenIntegrations?.();
+        return;
+      }
+      const projects = await api.listOakOsProjects();
+      setPublishProjects(projects);
+      setPublishProjectId("");
+      setPublishDialogError(projects.length ? null : "No OakOS projects are available for this token.");
+      setPublishDialogOpen(true);
+    } catch (cause) {
+      setPublishMessage({ kind: "error", text: cause instanceof Error ? cause.message : String(cause) });
+    } finally {
+      setLoadingPublishProjects(false);
+    }
+  };
+
+  const publishToOakOs = async () => {
+    const project = publishProjects.find((item) => item.id === publishProjectId);
+    if (!project) return;
+    setPublishing(true);
+    setPublishDialogError(null);
+    try {
+      await api.publishRecordingToOakOs(recording.id, project.id);
+      setPublishDialogOpen(false);
+      setPublishProjects([]);
+      setPublishProjectId("");
+      setPublishMessage({ kind: "success", text: `Sent to ${project.name}. It will appear after OakOS finishes processing it.` });
+    } catch (cause) {
+      setPublishDialogError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setPublishing(false);
+    }
+  };
   return (
     <div className="recording-detail">
       <header className="detail-header">
@@ -672,9 +723,34 @@ export function RecordingDetail({ recording, deleted, whisperModelPath, summaryM
           <span>{formatDate(recording.startedAt)} · {formatDuration(recording.playableDurationMs)} · {formatSize(recording.sizeBytes)}</span>
           {titleError && <span className="title-error" id="recording-title-error" role="alert">{titleError}</span>}
         </div>
-        {!deleted && <button className="button primary" onClick={() => api.exportRecording(recording)}><ExportIcon /> Export M4A</button>}
+        {!deleted && <div className="detail-actions">
+          <button className="button secondary" disabled={publishing || loadingPublishProjects} onClick={() => void choosePublishProject()}>{loadingPublishProjects ? "Loading projects…" : "Publish to OakOS"}</button>
+          <button className="button primary" disabled={publishing || loadingPublishProjects} onClick={() => api.exportRecording(recording)}><ExportIcon /> Export M4A</button>
+        </div>}
         {deleted && <button className="button primary" onClick={async () => { await api.restoreRecording(recording.id); onRemoved(); }}>Restore</button>}
       </header>
+
+      {publishMessage && <div className={publishMessage.kind === "error" ? "publish-notice error" : "publish-notice"} role={publishMessage.kind === "error" ? "alert" : "status"}>{publishMessage.text}</div>}
+
+      {publishDialogOpen && <div className="modal-backdrop" role="presentation" onKeyDown={(event) => { if (event.key === "Escape" && !publishing) setPublishDialogOpen(false); }}>
+        <section className="publish-dialog" role="dialog" aria-modal="true" aria-labelledby="publish-dialog-title">
+          <div>
+            <h2 id="publish-dialog-title">Publish to OakOS</h2>
+            <p>Choose where this recording should be published.</p>
+          </div>
+          <label className="field-label">Project
+            <select autoFocus value={publishProjectId} disabled={publishing || publishProjects.length === 0} onChange={(event) => { setPublishProjectId(event.target.value); setPublishDialogError(null); }}>
+              <option value="">Choose a project…</option>
+              {publishProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+            </select>
+          </label>
+          {publishDialogError && <p className="integration-error" role="alert">{publishDialogError}</p>}
+          <div className="publish-dialog-actions">
+            <button className="button secondary" disabled={publishing} onClick={() => setPublishDialogOpen(false)}>Cancel</button>
+            <button className="button primary" disabled={publishing || !publishProjectId} onClick={() => void publishToOakOs()}>{publishing ? "Publishing…" : "Publish"}</button>
+          </div>
+        </section>
+      </div>}
 
       <EncryptedAudioPlayer recording={recording} />
 
@@ -758,6 +834,85 @@ export function RecordingDetail({ recording, deleted, whisperModelPath, summaryM
       </section>
 
       {!deleted && <button className="danger-link" disabled={busy} onClick={async () => { if (window.confirm("Move this recording to Recently Deleted?")) { await api.deleteRecording(recording.id); onRemoved(); } }}><TrashIcon /> Move to Recently Deleted</button>}
+    </div>
+  );
+}
+
+function IntegrationsPage({ app }: { app: AppController }) {
+  const [connected, setConnected] = useState<boolean | null>(null);
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    void api.getOakOsIntegration().then((integration) => {
+      if (disposed) return;
+      setConnected(integration.connected);
+    }).catch((cause) => {
+      if (!disposed) {
+        setConnected(false);
+        setError(cause instanceof Error ? cause.message : String(cause));
+      }
+    });
+    return () => { disposed = true; };
+  }, []);
+
+  const connect = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const integration = await api.connectOakOs(token);
+      setConnected(integration.connected);
+      setToken("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const disconnect = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const updated = await app.disconnectOakOs();
+      if (updated) {
+        setConnected(false);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="settings-page integrations-page">
+      <header className="content-header"><div><h1>Integrations</h1><p>Connect Eavesdrop to external applications.</p></div></header>
+      <section className="settings-section integration-section">
+        <div className="integration-heading">
+          <div><h2>OakOS</h2><p>Publish recordings to an OakOS project for transcription and follow-up.</p></div>
+          {connected !== null && <span className={connected ? "integration-status connected" : "integration-status"}>{connected ? "Connected" : "Not connected"}</span>}
+        </div>
+
+        {error && <p className="integration-error" role="alert">{error}</p>}
+
+        {connected ? (
+          <div className="integration-connected">
+            <p>Choose the destination project each time you publish a recording. OakOS processes the audio asynchronously.</p>
+            <div className="integration-actions">
+              <button className="button secondary" disabled={busy} onClick={() => void disconnect()}>Disconnect</button>
+            </div>
+          </div>
+        ) : connected === false ? (
+          <div className="integration-connect-form">
+            <label className="field-label" htmlFor="oakos-token">Personal access token
+              <input id="oakos-token" type="password" value={token} autoComplete="off" spellCheck={false} placeholder="oakos_pat_…" disabled={busy} onChange={(event) => setToken(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && token.trim()) void connect(); }} />
+            </label>
+            <p>The token is stored in this computer’s secure credential store.</p>
+            <button className="button primary" disabled={busy || !token.trim()} onClick={() => void connect()}>{busy ? "Connecting…" : "Connect OakOS"}</button>
+          </div>
+        ) : <p className="settings-description">Checking OakOS connection…</p>}
+      </section>
     </div>
   );
 }

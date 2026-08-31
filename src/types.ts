@@ -143,6 +143,19 @@ export interface AppSettings {
   summaryPrompt: string | null;
 }
 
+export interface OakOsIntegration {
+  connected: boolean;
+}
+
+export interface OakOsProject {
+  id: string;
+  name: string;
+}
+
+export interface OakOsPublishResult {
+  location: string | null;
+}
+
 export interface AppSnapshot {
   session: RecordingSession;
   permissions: PermissionState;

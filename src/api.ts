@@ -7,6 +7,9 @@ import type {
   AudioLevels,
   MeetingCandidate,
   ModelDownloadStatus,
+  OakOsIntegration,
+  OakOsProject,
+  OakOsPublishResult,
   Recording,
   RecordingSession,
   StartRecordingInput,
@@ -55,6 +58,11 @@ let browserInstalledWhisperModels = new Set<string>();
 let browserInstalledSummaryModels = new Set<string>();
 let browserRecordingClock: { startedAtMs: number; pausedAtMs: number | null; pausedTotalMs: number } | null = null;
 let browserHighlights: Recording["highlights"] = [];
+let browserOakOsConnected = false;
+const browserOakOsProjects: OakOsProject[] = [
+  { id: "oak-project-one", name: "Product" },
+  { id: "oak-project-two", name: "Research" },
+];
 const browserSessionListeners = new Set<(session: RecordingSession) => void>();
 const browserRecordingFinalizedListeners = new Set<(recording: Recording) => void>();
 
@@ -102,6 +110,38 @@ export async function updateSettings(settings: Partial<AppSettings>): Promise<Ap
   if (isTauri()) return command<AppSnapshot>("update_settings", { settings });
   browserSnapshot.settings = { ...browserSnapshot.settings, ...settings };
   return structuredClone(browserSnapshot);
+}
+
+export async function getOakOsIntegration(): Promise<OakOsIntegration> {
+  if (isTauri()) return command<OakOsIntegration>("get_oakos_integration");
+  return { connected: browserOakOsConnected };
+}
+
+export async function connectOakOs(token: string): Promise<OakOsIntegration> {
+  if (isTauri()) return command<OakOsIntegration>("connect_oakos", { token });
+  if (!token.trim()) throw new Error("enter an OakOS personal access token");
+  browserOakOsConnected = true;
+  return { connected: true };
+}
+
+export async function disconnectOakOs(): Promise<AppSnapshot> {
+  if (isTauri()) return command<AppSnapshot>("disconnect_oakos");
+  browserOakOsConnected = false;
+  return structuredClone(browserSnapshot);
+}
+
+export async function listOakOsProjects(): Promise<OakOsProject[]> {
+  if (isTauri()) return command<OakOsProject[]>("list_oakos_projects");
+  if (!browserOakOsConnected) throw new Error("OakOS is not connected");
+  return structuredClone(browserOakOsProjects);
+}
+
+export async function publishRecordingToOakOs(id: string, projectId: string): Promise<OakOsPublishResult> {
+  if (isTauri()) return command<OakOsPublishResult>("publish_recording_to_oakos", { id, projectId });
+  if (!browserOakOsConnected) throw new Error("OakOS is not connected");
+  if (!browserRecordings.some((recording) => recording.id === id)) throw new Error("recording not found");
+  if (!browserOakOsProjects.some((project) => project.id === projectId)) throw new Error("OakOS project not found");
+  return { location: `/api/v1/recordings/${id}` };
 }
 
 export async function startRecording(input: StartRecordingInput): Promise<RecordingSession> {
@@ -488,6 +528,7 @@ export function resetBrowserMock() {
   browserInstalledSummaryModels = new Set();
   browserRecordingClock = null;
   browserHighlights = [];
+  browserOakOsConnected = false;
   browserSessionListeners.clear();
   browserRecordingFinalizedListeners.clear();
 }

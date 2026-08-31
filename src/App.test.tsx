@@ -132,3 +132,34 @@ describe("RecordingDetail processing jobs", () => {
     expect(transcribe).not.toHaveBeenCalled();
   });
 });
+
+describe("RecordingDetail OakOS publishing", () => {
+  it("requires a fresh project choice before publishing", async () => {
+    vi.spyOn(api, "getOakOsIntegration").mockResolvedValue({ connected: true });
+    vi.spyOn(api, "listOakOsProjects").mockResolvedValue([
+      { id: "project-one", name: "Product" },
+      { id: "project-two", name: "Research" },
+    ]);
+    const publish = vi.spyOn(api, "publishRecordingToOakOs").mockResolvedValue({ location: "/api/v1/recordings/remote" });
+    render(<RecordingDetail recording={recording} {...baseProps} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Publish to OakOS" }));
+    const projectSelect = await screen.findByLabelText("Project");
+    expect((projectSelect as HTMLSelectElement).value).toBe("");
+    fireEvent.change(projectSelect, { target: { value: "project-one" } });
+    fireEvent.click(screen.getByRole("button", { name: "Publish" }));
+
+    await waitFor(() => expect(publish).toHaveBeenCalledWith(recording.id, "project-one"));
+    expect((await screen.findByRole("status")).textContent).toContain("Sent to Product");
+  });
+
+  it("opens integration setup when OakOS is not connected", async () => {
+    vi.spyOn(api, "getOakOsIntegration").mockResolvedValue({ connected: false });
+    const onOpenIntegrations = vi.fn();
+    render(<RecordingDetail recording={recording} {...baseProps} onOpenIntegrations={onOpenIntegrations} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Publish to OakOS" }));
+
+    await waitFor(() => expect(onOpenIntegrations).toHaveBeenCalledOnce());
+  });
+});

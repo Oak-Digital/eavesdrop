@@ -12,6 +12,7 @@ use crate::{
         AppSnapshot, ModelDownloadStatus, OnboardingSettings, Recording, RecordingSession,
         SettingsPatch, StartRecordingInput, SummaryModelInfo, WhisperModelInfo,
     },
+    oakos::{self, OakOsIntegration, OakOsProject, OakOsPublishResult},
     state::AppState,
 };
 
@@ -52,6 +53,52 @@ pub fn update_settings(
     let updated = state.update_settings(&settings)?;
     let _ = app.emit("settings-changed", updated);
     state.snapshot(false)
+}
+
+#[tauri::command]
+pub fn get_oakos_integration() -> AppResult<OakOsIntegration> {
+    oakos::integration()
+}
+
+#[tauri::command]
+pub async fn connect_oakos(token: String) -> AppResult<OakOsIntegration> {
+    tauri::async_runtime::spawn_blocking(move || oakos::connect(&token))
+        .await
+        .map_err(|error| AppError::Other(format!("OakOS connection task failed: {error}")))?
+}
+
+#[tauri::command]
+pub fn disconnect_oakos(state: State<'_, AppState>) -> AppResult<AppSnapshot> {
+    oakos::disconnect()?;
+    state.snapshot(false)
+}
+
+#[tauri::command]
+pub async fn list_oakos_projects() -> AppResult<Vec<OakOsProject>> {
+    tauri::async_runtime::spawn_blocking(oakos::list_projects)
+        .await
+        .map_err(|error| AppError::Other(format!("OakOS project task failed: {error}")))?
+}
+
+#[tauri::command]
+pub async fn publish_recording_to_oakos(
+    app: AppHandle,
+    id: String,
+    project_id: String,
+) -> AppResult<OakOsPublishResult> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let recording = state.repository.recording(&id)?;
+        if recording.deleted_at.is_some() {
+            return Err(AppError::Other(
+                "restore this recording before publishing it".into(),
+            ));
+        }
+        let audio = state.decrypt_recording(&id)?;
+        oakos::publish_recording(&project_id, &recording.id, &recording.title, audio)
+    })
+    .await
+    .map_err(|error| AppError::Other(format!("OakOS publishing task failed: {error}")))?
 }
 
 #[tauri::command]

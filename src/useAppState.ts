@@ -86,6 +86,12 @@ export function useAppState() {
     updateSettings: async (settings: Parameters<typeof api.updateSettings>[0]) => {
       const next = await run(() => api.updateSettings(settings));
       if (next) setSnapshot(next);
+      return next;
+    },
+    disconnectOakOs: async () => {
+      const next = await run(api.disconnectOakOs);
+      if (next) setSnapshot(next);
+      return next;
     },
     installWhisperModel: async (modelId: string) => {
       const next = await run(() => api.installWhisperModel(modelId));
