@@ -11,12 +11,12 @@ import { Icon } from "./Icons";
 import {
   parseRelease,
   RELEASE_API,
-  RELEASES_URL,
   REPOSITORY,
 } from "./releases.mjs";
 import snapshot from "./release-snapshot.json";
 import { detectPlatform } from "./platform";
 import { RecorderHero } from "./RecorderHero";
+import ReleaseNotes from "./ReleaseNotes";
 
 const Demo = lazy(() => import("./Demo"));
 
@@ -174,9 +174,7 @@ function Downloads() {
           </div>
         </AsciiReveal>
         <div className="download-links">
-          <a href={release?.notes || RELEASES_URL}>
-            Release notes <span aria-hidden="true">↗</span>
-          </a>
+          <a href="#release-notes">Release notes</a>
           <a href={`${REPOSITORY}/releases`}>
             All releases <span aria-hidden="true">↗</span>
           </a>
@@ -227,6 +225,7 @@ export default function App() {
           <nav aria-label="Main navigation">
             <a href="#how-it-works">How it works</a>
             <a href="#privacy">Privacy</a>
+            <a href="#release-notes">Release notes</a>
             <a className="header-download" href="#download">
               Download <Icon name="download" size={14} />
             </a>
@@ -423,6 +422,7 @@ export default function App() {
             </div>
           </section>
           <Downloads />
+          <ReleaseNotes />
           <section className="faq section" aria-labelledby="faq-title">
             <h2 id="faq-title">
               A few things
@@ -448,6 +448,7 @@ export default function App() {
             <p>A little less typing. A little more listening.</p>
           </div>
           <div className="footer-links">
+            <a href="#release-notes">Release notes</a>
             <a href={REPOSITORY}>
               <Icon name="github" size={16} /> GitHub
             </a>

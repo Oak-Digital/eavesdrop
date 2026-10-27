@@ -46,6 +46,12 @@ Tests cover installer selection, missing platforms, malformed release responses,
 
 ## Content and loading
 
+### Release notes
+
+The `#release-notes` section shows the three most recent published stable releases, with an option to show older entries and a link to the complete GitHub history. Header, download, and footer links lead to this section. `src/ReleaseNotes.tsx` fetches the ten most recent releases from GitHub and renders their Markdown with raw HTML disabled. Publish release notes in the GitHub release body to update the website automatically; older releases with only a changelog link keep that link.
+
+`src/release-history-snapshot.json` holds a saved copy of the ten public releases verified on 27 October 2026, through v0.1.24. It appears immediately and remains available with an explicit notice if the API fails, is rate-limited, or exceeds six seconds. Refresh the snapshot from the public releases API periodically, keeping `tag_name`, `published_at`, `body`, `draft`, and `prerelease`. The release parser tests also cover history ordering, filtering, missing notes, and unavailable responses.
+
 ### Social sharing
 
 `index.html` includes canonical, Open Graph, and Twitter large-image card metadata in the initial HTML so crawlers do not need JavaScript. The public URL is `https://eavesdrop.oak.dk/`; update the canonical, `og:url`, and both image URLs together if the domain changes.
@@ -67,7 +73,7 @@ Use `npm run preview` after building to check the animation in the page. Verify 
 
 - `src/App.tsx`: presentation, privacy, download lookup, and FAQs.
 - `src/Demo.tsx`: keyboard-accessible recording/summary/transcript preview using fictional example content. It does not capture or play audio.
-- `src/styles.css`: responsive paper-and-ink design, using locally bundled Geist fonts.
+- `src/styles.css`: responsive light design with rounded cards, sunset/violet/sky gradients inspired by ascii-reveal, and locally bundled Geist fonts. The shared palette and 20px card radius live in the root CSS variables.
 - `index.html`: title, search/social descriptions, favicon, and a no-JavaScript download fallback.
 - `ascii-reveal` supplies `AsciiSkeleton` during the real release request and lazy preview load, and `AsciiReveal` when content arrives. There are no artificial loading delays. The package and site respect reduced-motion preferences.
 

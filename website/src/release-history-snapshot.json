@@ -1,0 +1,72 @@
+[
+  {
+    "tag_name": "v0.1.24",
+    "published_at": "2026-10-27T10:45:31Z",
+    "body": "Fixes the two command windows that repeatedly flashed while Eavesdrop was open on Windows.\n\n- Meeting detection now runs its process and window checks without opening console windows.\n- The local summary engine also starts without a console window.\n- Added Windows regression tests that check console suppression, piped input/output, and process-list access before packaging.\n\nUpdate from Settings or install the Windows x64 MSI below. Meeting detection can remain enabled after updating.\n",
+    "draft": false,
+    "prerelease": false
+  },
+  {
+    "tag_name": "v0.1.23",
+    "published_at": "2026-10-27T10:20:13Z",
+    "body": "Eavesdrop 0.1.23 adds optional cloud summaries, reusable summary templates, and an updated interface.\n\n- Choose local processing or an OpenAI or Anthropic cloud model for each summary. API keys are stored in the system credential store; cloud summaries send transcript text, while transcription remains local.\n- Use Discussion summary, Concise summary, Action items, or Custom prompt templates. Detailed summaries preserve Markdown, and saved summaries remember their template.\n- Updated paper-and-ink styling, locally bundled Geist fonts, light appearance by default, and shared accessible dropdowns.\n- New glass waveform macOS app icon.\n- Added the standalone website source with release-aware downloads and an interactive product preview.\n\nExisting appearance preferences, custom prompts, and summaries are preserved. Cloud processing requires your own provider API key and may incur provider charges.\n\nDownload the universal macOS DMG or Windows x64 MSI below. Existing installations can check for the update in Settings.\n",
+    "draft": false,
+    "prerelease": false
+  },
+  {
+    "tag_name": "v0.1.22",
+    "published_at": "2026-08-31T13:35:32Z",
+    "body": "**Full Changelog**: https://github.com/Oak-Digital/eavesdrop/compare/v0.1.21...v0.1.22",
+    "draft": false,
+    "prerelease": false
+  },
+  {
+    "tag_name": "v0.1.21",
+    "published_at": "2026-08-28T09:16:52Z",
+    "body": "**Full Changelog**: https://github.com/Oak-Digital/eavesdrop/compare/v0.1.20...v0.1.21",
+    "draft": false,
+    "prerelease": false
+  },
+  {
+    "tag_name": "v0.1.20",
+    "published_at": "2026-08-27T10:18:31Z",
+    "body": "**Full Changelog**: https://github.com/Oak-Digital/eavesdrop/compare/v0.1.19...v0.1.20",
+    "draft": false,
+    "prerelease": false
+  },
+  {
+    "tag_name": "v0.1.19",
+    "published_at": "2026-08-25T08:05:31Z",
+    "body": "**Full Changelog**: https://github.com/Oak-Digital/eavesdrop/compare/v0.1.18...v0.1.19",
+    "draft": false,
+    "prerelease": false
+  },
+  {
+    "tag_name": "v0.1.18",
+    "published_at": "2026-08-24T14:40:50Z",
+    "body": "**Full Changelog**: https://github.com/Oak-Digital/eavesdrop/compare/v0.1.17...v0.1.18",
+    "draft": false,
+    "prerelease": false
+  },
+  {
+    "tag_name": "v0.1.17",
+    "published_at": "2026-08-24T13:36:32Z",
+    "body": "**Full Changelog**: https://github.com/Oak-Digital/eavesdrop/compare/v0.1.15...v0.1.17",
+    "draft": false,
+    "prerelease": false
+  },
+  {
+    "tag_name": "v0.1.14",
+    "published_at": "2026-08-19T15:09:35Z",
+    "body": "**Full Changelog**: https://github.com/Oak-Digital/eavesdrop/compare/v0.1.13...v0.1.14",
+    "draft": false,
+    "prerelease": false
+  },
+  {
+    "tag_name": "v0.1.13",
+    "published_at": "2026-08-11T14:35:19Z",
+    "body": "**Full Changelog**: https://github.com/Oak-Digital/eavesdrop/compare/v0.1.12...v0.1.13",
+    "draft": false,
+    "prerelease": false
+  }
+]
