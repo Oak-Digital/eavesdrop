@@ -16,6 +16,7 @@ import {
 } from "./releases.mjs";
 import snapshot from "./release-snapshot.json";
 import { detectPlatform } from "./platform";
+import { RecorderHero } from "./RecorderHero";
 
 const Demo = lazy(() => import("./Demo"));
 
@@ -34,21 +35,6 @@ function Brand() {
     </div>
   );
 }
-
-const signal = Array.from({ length: 33 }, (_, y) =>
-  Array.from({ length: 65 }, (_, x) => {
-    const dx = (x - 32) / 32;
-    const dy = (y - 16) / 16;
-    const radius = Math.sqrt(dx * dx + dy * dy);
-    const envelope = Math.exp(-dx * dx * 4.5);
-    const wave =
-      Math.abs(Math.sin(dx * 24) * 0.62 + Math.sin(dx * 57) * 0.22) * envelope;
-    if (Math.abs(dy) < wave) return Math.abs(dy) < wave * 0.5 ? "█" : "▒";
-    if (radius > 0.94 && radius < 1.01) return "+";
-    if (y === 16) return "─";
-    return (x + y * 3) % 9 === 0 && radius < 1 ? "·" : " ";
-  }).join(""),
-).join("\n");
 
 class PreviewBoundary extends Component<
   { children: ReactNode },
@@ -278,17 +264,7 @@ export default function App() {
                 transcription. Your library.
               </p>
             </div>
-            <div className="hero-art" aria-hidden="true">
-              <div className="signal-coordinates mono">
-                <span>input → memory</span>
-                <span>[ e ]</span>
-              </div>
-              <pre className="ascii-signal">{signal}</pre>
-              <div className="signal-caption mono">
-                <span>Every word has a place.</span>
-                <span>● ─────── 01:24</span>
-              </div>
-            </div>
+            <RecorderHero />
           </section>
           <div className="capabilities mono">
             <span>

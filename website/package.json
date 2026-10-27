@@ -4,6 +4,9 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
+    "hero:build": "node scripts/hairline/build.mjs",
+    "predev": "npm run hero:build",
+    "prebuild": "npm run hero:build",
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",

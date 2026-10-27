@@ -7,6 +7,9 @@ src-tauri/target/
 src-tauri/gen/schemas/
 .DS_Store
 *.log
+website/src/hairline/recorder.generated.js
+website/scripts/hairline/hairline-recorder.html
+website/scripts/hairline/hairline-recorder-*.png
 *.key
 *.p12
 src-tauri/binaries/

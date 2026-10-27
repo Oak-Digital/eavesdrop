@@ -50,7 +50,18 @@ Tests cover installer selection, missing platforms, malformed release responses,
 
 `index.html` includes canonical, Open Graph, and Twitter large-image card metadata in the initial HTML so crawlers do not need JavaScript. The public URL is `https://eavesdrop.oak.dk/`; update the canonical, `og:url`, and both image URLs together if the domain changes.
 
-`public/og-image.jpg` is the 1200 × 630 share image. Its editable source is `scripts/share-image.html`, using the same bundled Geist fonts, ASCII waveform, and circular Oak logo as the landing page. To refresh it, run `npm run dev`, open `/scripts/share-image.html`, let the fonts load, and capture the top-left 1200 × 630 pixels at 1× scale as JPEG. The source page is not an entry point in the production build. If the image dimensions or format change, update the image metadata in `index.html` too.
+`public/og-image.jpg` is the 1200 × 630 share image. Its editable source is `scripts/share-image.html`, using the bundled Geist fonts, original ASCII waveform, and circular Oak logo. To refresh it, run `npm run dev`, open `/scripts/share-image.html`, let the fonts load, and capture the top-left 1200 × 630 pixels at 1× scale as JPEG. The source page is not an entry point in the production build. If the image dimensions or format change, update the image metadata in `index.html` too.
+
+### Recorder hero
+
+The hero is a custom isometric tape recorder built with the [Hairline creation skill](https://github.com/lucasmarkes/hairline/tree/main/skills/hairline-create). Moving across it scrubs the reels and transfers tape between them. Arrow keys, Home, and End also scrub; the idle tour moves forward, rewinds, and returns to rest. A Pause button stops the tour. Reduced-motion preferences disable autoplay, and Hairline's shared loop sleeps offscreen.
+
+- Edit `scripts/hairline/recorder.js` for geometry, interaction, and tour stops; `src/RecorderHero.tsx` owns the React lifecycle and playback control.
+- `npm run hero:build` validates the figure and generates the ESM adapter plus a standalone `scripts/hairline/hairline-recorder.html` preview. It runs automatically before development and production builds. Generated files are ignored by Git.
+- `scripts/hairline/vendor/` preserves the upstream kernel, bench, builder, and validator unchanged from Hairline commit `37d2e78dcb333ab30c3338e28ed4a690364ea014`, under the included MIT license. There is no runtime CDN dependency.
+- The theme uses Hairline's public CSS variables in `src/styles.css`. The illustration does not capture or play audio.
+
+For Hairline's eight-view visual check, run its `skills/hairline-create/look.mjs` from `scripts/hairline/` with `recorder.js --answer 300,175 --edge 65,175 --edge 335,175`. It produces a sheet and motion frames to inspect; the static validator alone cannot judge appearance.
 
 ### Page files
 
@@ -60,4 +71,4 @@ Tests cover installer selection, missing platforms, malformed release responses,
 - `index.html`: title, search/social descriptions, favicon, and a no-JavaScript download fallback.
 - `ascii-reveal` supplies `AsciiSkeleton` during the real release request and lazy preview load, and `AsciiReveal` when content arrives. There are no artificial loading delays. The package and site respect reduced-motion preferences.
 
-The design is inspired by [ascii-reveal](https://quanhoangindex.github.io/ascii-reveal/); no reference artwork is copied. The ASCII waveform and computer illustration are native text. Product claims are based on the app source and repository documentation, including the distinction between local processing and optional cloud summaries.
+The loading treatments are inspired by [ascii-reveal](https://quanhoangindex.github.io/ascii-reveal/); the recorder is custom Hairline geometry, and the privacy illustration is native text. Product claims are based on the app source and repository documentation, including the distinction between local processing and optional cloud summaries.
