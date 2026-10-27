@@ -15,7 +15,7 @@ use std::{
     fs,
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
 };
 
 use serde::{Deserialize, Serialize};
@@ -201,7 +201,7 @@ pub fn summarize(
     })
     .map_err(|error| AppError::Other(format!("could not build the summary request: {error}")))?;
 
-    let mut child = Command::new(&engine)
+    let mut child = crate::background_process::command(&engine)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

@@ -6,9 +6,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(target_os = "windows")]
-use std::process::Command;
-
 use chrono::Utc;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -259,15 +256,16 @@ fn platform_candidates() -> Vec<MeetingCandidate> {
 
 #[cfg(target_os = "windows")]
 fn platform_candidates() -> Vec<MeetingCandidate> {
-    let processes = Command::new("tasklist")
+    let processes = crate::background_process::command("tasklist")
         .args(["/FO", "CSV", "/NH"])
         .output()
         .ok()
         .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
         .unwrap_or_default();
-    let windows = Command::new("powershell")
+    let windows = crate::background_process::command("powershell")
         .args([
             "-NoProfile",
+            "-NonInteractive",
             "-Command",
             "Get-Process | Where-Object {$_.MainWindowTitle} | ForEach-Object { \"$($_.ProcessName)`t$($_.MainWindowTitle)\" }",
         ])

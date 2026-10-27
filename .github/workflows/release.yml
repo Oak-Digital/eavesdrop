@@ -220,6 +220,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
+      - name: Verify background processes do not create console windows
+        shell: pwsh
+        run: |
+          $testBinary = Join-Path $env:RUNNER_TEMP "eavesdrop-background-process-tests.exe"
+          rustc --edition=2024 --test src-tauri/src/background_process.rs -o $testBinary
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $testBinary
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: ./src-tauri -> target

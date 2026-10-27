@@ -1,4 +1,5 @@
 mod audio;
+mod background_process;
 mod cloud_summarization;
 mod commands;
 mod crypto;
