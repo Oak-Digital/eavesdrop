@@ -56,7 +56,7 @@ The `#release-notes` section shows the three most recent published stable releas
 
 `index.html` includes canonical, Open Graph, and Twitter large-image card metadata in the initial HTML so crawlers do not need JavaScript. The public URL is `https://eavesdrop.oak.dk/`; update the canonical, `og:url`, and both image URLs together if the domain changes.
 
-`public/og-image.jpg` is the 1200 × 630 share image. Its editable source is `scripts/share-image.html`, using the bundled Geist fonts, original ASCII waveform, and circular Oak logo. To refresh it, run `npm run dev`, open `/scripts/share-image.html`, let the fonts load, and capture the top-left 1200 × 630 pixels at 1× scale as JPEG. The source page is not an entry point in the production build. If the image dimensions or format change, update the image metadata in `index.html` too.
+`public/og-image.jpg` is the 1200 × 630 share image. Its editable source is `scripts/share-image.html`, using the bundled Geist fonts, the landing page’s Hairline tape recorder at a fixed pose, sunset gradient, and circular Oak logo. To refresh it, run `npm run dev`, open `/scripts/share-image.html`, wait for `html[data-share-ready="true"]` (the figure and fonts are ready), and capture the top-left 1200 × 630 pixels at 1× scale as JPEG. The source page is not an entry point in the production build. Update the version query in both image URLs in `index.html` when replacing the image so crawlers can fetch the new asset. If the image dimensions or format change, update the image metadata too.
 
 ### Recorder hero
 

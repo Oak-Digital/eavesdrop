@@ -22,39 +22,51 @@
       .brand { font-family: "Geist Mono", monospace; font-size: 29px; font-weight: 600; letter-spacing: -1.5px; }
       .maker { display: flex; align-items: center; gap: 8px; margin-left: 8px; font-size: 18px; }
       .maker span:first-child { color: #5f5f68; }
-      h1 { margin: 65px 0 24px; font-size: 72px; line-height: 1.03; letter-spacing: -3.8px; font-weight: 600; }
-      .description { margin: 0; color: #5f5f68; font-size: 24px; line-height: 1.5; }
-      .signal { position: absolute; right: 52px; top: 150px; margin: 0; color: #765b86; font-family: "Geist Mono", monospace; font-size: 10px; line-height: 10px; letter-spacing: 0; white-space: pre; }
+      h1 { margin: 75px 0 24px; font-size: 72px; line-height: 1.03; letter-spacing: -3.8px; font-weight: 600; }
+      .description { margin: 0; color: #5f5f68; font-size: 23px; line-height: 1.5; }
+      .recorder-card { position: absolute; right: 60px; top: 112px; width: 440px; padding: 24px 24px 20px; border: 2px solid #fff; border-radius: 20px; background: linear-gradient(180deg, #ff3cac 0%, #ff174f 28%, #ff4b20 62%, #ff9416 100%); color: #fff; box-shadow: 0 18px 32px -14px #ff246b66, 0 4px 12px #2b143414; }
+      .recorder-heading { display: flex; justify-content: space-between; font-family: "Geist Mono", monospace; font-size: 11px; }
+      .recorder-stage[data-hairline] { --hairline-plate: #ffd1bd; --hairline-edge: #6c315e; --hairline-hi: #392039; --hairline-lo: #c98291; --hairline-mid: #a95c7b; width: 100%; aspect-ratio: 5 / 4; }
+      .recorder-stage > svg { display: block; width: 100%; height: auto; }
+      .equalizer { display: block; width: 100%; height: 36px; margin-top: -12px; }
+      .equalizer path { fill: none; stroke: currentColor; stroke-width: 1; stroke-linecap: round; vector-effect: non-scaling-stroke; }
       footer { position: absolute; bottom: 44px; left: 60px; right: 60px; display: flex; justify-content: space-between; padding-top: 24px; border-top: 1px solid #dedee2; font-size: 17px; font-family: "Geist Mono", monospace; color: #5f5f68; }
     </style>
   </head>
   <body>
     <main>
       <header>
-        <svg width="31" height="35" viewBox="0 0 24 24" fill="none" stroke="#765b86" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M3 10v4m4-8v12m5-16v20m5-16v12m4-8v4" /></svg>
+        <svg width="31" height="35" viewBox="0 0 24 24" fill="none" stroke="url(#brand-gradient)" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><defs><linearGradient id="brand-gradient" x1="0" y1="2" x2="0" y2="22" gradientUnits="userSpaceOnUse"><stop stop-color="#ff3cac" /><stop offset="0.5" stop-color="#ff174f" /><stop offset="1" stop-color="#ff9416" /></linearGradient></defs><path d="M3 10v4m4-8v12m5-16v20m5-16v12m4-8v4" /></svg>
         <span class="brand">eavesdrop</span>
         <span class="maker"><span>by</span><img src="/oak-logo.svg" width="26" height="26" alt="" /><span>Oak</span></span>
       </header>
       <h1>Stay in the<br />conversation.</h1>
       <p class="description">Record meetings. Remember the details.<br />Transcripts and summaries, on your device.</p>
-      <pre class="signal" aria-hidden="true"></pre>
+      <div class="recorder-card" aria-hidden="true">
+        <div class="recorder-heading"><span>Every word has a place.</span><span>01:24 / 05:00</span></div>
+        <div class="recorder-stage" data-hairline="recorder" data-hairline-theme="light"></div>
+        <svg class="equalizer" viewBox="0 0 600 48" preserveAspectRatio="none"><path /></svg>
+      </div>
       <footer><span>For macOS &amp; Windows</span><span>eavesdrop.oak.dk</span></footer>
     </main>
     <script type="module">
-      // Same native ASCII waveform used by the landing page.
-      document.querySelector(".signal").textContent = Array.from({ length: 33 }, (_, y) =>
-        Array.from({ length: 65 }, (_, x) => {
-          const dx = (x - 32) / 32;
-          const dy = (y - 16) / 16;
-          const radius = Math.sqrt(dx * dx + dy * dy);
-          const envelope = Math.exp(-dx * dx * 4.5);
-          const wave = Math.abs(Math.sin(dx * 24) * 0.62 + Math.sin(dx * 57) * 0.22) * envelope;
-          if (Math.abs(dy) < wave) return Math.abs(dy) < wave * 0.5 ? "█" : "▒";
-          if (radius > 0.94 && radius < 1.01) return "+";
-          if (y === 16) return "─";
-          return (x + y * 3) % 9 === 0 && radius < 1 ? "·" : " ";
-        }).join(""),
-      ).join("\n");
+      import { HL, recorder } from "../src/hairline/recorder.generated.js";
+
+      // Render the actual landing-page figure at its fixed initial pose.
+      HL.inject(document);
+      const stage = document.querySelector(".recorder-stage");
+      const svg = HL.mk("svg", { viewBox: "0 0 400 320" }, stage);
+      const handle = recorder.mount({ stage, svg, read: { textContent: "01:24" } }, recorder.range[1]);
+      handle.setPlaying(false);
+      document.querySelector(".equalizer path").setAttribute("d", Array.from({ length: 65 }, (_, i) => {
+        const x = 3 + (i / 64) * 594;
+        const envelope = 0.45 + 0.55 * Math.sin((i / 64) * Math.PI);
+        const signal = 0.5 + 0.3 * Math.sin(84 * 2.4 + i * 0.63) + 0.2 * Math.sin(84 * 3.7 - i * 0.37);
+        const height = 3 + 18 * envelope * signal;
+        return `M${x.toFixed(2)} ${(24 - height).toFixed(2)}V${(24 + height).toFixed(2)}`;
+      }).join(""));
+      await document.fonts.ready;
+      document.documentElement.dataset.shareReady = "true";
     </script>
   </body>
 </html>
