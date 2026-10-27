@@ -54,6 +54,7 @@ pub enum CaptureMessage {
     Samples(SourceChunk),
     Pause,
     Resume,
+    SetMode(CaptureMode),
     Warning(String),
     Stop,
 }
@@ -65,6 +66,7 @@ pub trait CaptureBackend: Send {
         microphone_id: Option<&str>,
         sender: Sender<CaptureMessage>,
     ) -> AppResult<()>;
+    fn set_system_audio(&mut self, enabled: bool, sender: Sender<CaptureMessage>) -> AppResult<()>;
     fn stop(&mut self);
 }
 
@@ -76,6 +78,7 @@ pub struct CaptureSession {
     started: Instant,
     paused_since: Option<Instant>,
     paused_total: Duration,
+    mode: CaptureMode,
 }
 
 pub struct WorkerResult {
@@ -108,7 +111,26 @@ impl CaptureSession {
             started: Instant::now(),
             paused_since: None,
             paused_total: Duration::ZERO,
+            mode,
         })
+    }
+
+    pub fn set_mode(&mut self, mode: CaptureMode) -> AppResult<()> {
+        if mode == self.mode {
+            return Ok(());
+        }
+        // Only change the computer audio tap. The microphone, encoder, journal,
+        // recording clock, and pause state all continue uninterrupted.
+        self.backend
+            .set_system_audio(mode == CaptureMode::Online, self.sender.clone())?;
+        if let Err(error) = self.sender.send(CaptureMessage::SetMode(mode)) {
+            let _ = self
+                .backend
+                .set_system_audio(self.mode == CaptureMode::Online, self.sender.clone());
+            return Err(AppError::Audio(error.to_string()));
+        }
+        self.mode = mode;
+        Ok(())
     }
 
     pub fn pause(&mut self) -> AppResult<()> {
@@ -393,7 +415,7 @@ fn system_audio_alert(
 
 fn capture_worker(
     app: AppHandle,
-    mode: CaptureMode,
+    mut mode: CaptureMode,
     receiver: Receiver<CaptureMessage>,
     journal_path: PathBuf,
     key: [u8; 32],
@@ -413,7 +435,7 @@ fn capture_worker(
     let mut warning = None;
     let mut last_disk_check = Instant::now();
     let mut low_disk_warning_sent = false;
-    let capture_started = Instant::now();
+    let mut capture_started = Instant::now();
     let mut system_stall_warned = false;
 
     #[cfg(feature = "aec3")]
@@ -437,13 +459,14 @@ fn capture_worker(
                     last_mic_sample = Some(Instant::now());
                     microphone.extend(chunk.samples);
                 }
-                SourceKind::System => {
+                SourceKind::System if mode == CaptureMode::Online => {
                     system_target = chunk.level;
                     last_system_sample = Some(Instant::now());
                     system.extend(chunk.samples);
                     // Re-arm so a later stall is reported again.
                     system_stall_warned = false;
                 }
+                SourceKind::System => {}
             },
             Ok(CaptureMessage::Pause) => {
                 paused = true;
@@ -459,7 +482,41 @@ fn capture_worker(
                     },
                 );
             }
-            Ok(CaptureMessage::Resume) => paused = false,
+            Ok(CaptureMessage::Resume) => {
+                paused = false;
+                capture_started = Instant::now();
+                last_system_sample = None;
+            }
+            Ok(CaptureMessage::SetMode(next)) => {
+                // Finish queued audio with its original mix before switching.
+                // Discard any partial system frame so it cannot leak into a
+                // later microphone-only section or a newly enabled tap.
+                let before = segment.len();
+                drain_frames(
+                    mode,
+                    &mut microphone,
+                    &mut system,
+                    &mut segment,
+                    true,
+                    #[cfg(feature = "aec3")]
+                    &echo_processor,
+                );
+                playable_samples += (segment.len() - before) as u64;
+                system.clear();
+                mode = next;
+                system_level = 0.0;
+                system_target = 0.0;
+                last_system_sample = None;
+                capture_started = Instant::now();
+                system_stall_warned = false;
+                let _ = app.emit(
+                    "audio-levels",
+                    AudioLevels {
+                        mic: mic_level,
+                        system: 0.0,
+                    },
+                );
+            }
             Ok(CaptureMessage::Warning(message)) => {
                 warning = Some(message.clone());
                 let _ = app.emit("capture-warning", message);
@@ -739,6 +796,102 @@ pub fn build_m4a(packets: &[Vec<u8>]) -> AppResult<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct SwitchingBackend {
+        changes: Arc<std::sync::Mutex<Vec<bool>>>,
+        fail_enable: bool,
+    }
+
+    impl CaptureBackend for SwitchingBackend {
+        fn start(
+            &mut self,
+            _: CaptureMode,
+            _: Option<&str>,
+            _: Sender<CaptureMessage>,
+        ) -> AppResult<()> {
+            panic!("changing sources must not restart the microphone");
+        }
+        fn stop(&mut self) {
+            panic!("changing sources must not stop the microphone");
+        }
+        fn set_system_audio(&mut self, enabled: bool, _: Sender<CaptureMessage>) -> AppResult<()> {
+            if enabled && self.fail_enable {
+                return Err(AppError::Permission("computer audio denied".into()));
+            }
+            self.changes.lock().unwrap().push(enabled);
+            Ok(())
+        }
+    }
+
+    fn switching_session(
+        fail_enable: bool,
+    ) -> (
+        CaptureSession,
+        Receiver<CaptureMessage>,
+        Arc<std::sync::Mutex<Vec<bool>>>,
+    ) {
+        let (sender, receiver) = mpsc::channel();
+        let changes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let session = CaptureSession {
+            backend: Box::new(SwitchingBackend {
+                changes: changes.clone(),
+                fail_enable,
+            }),
+            sender,
+            worker: None,
+            paused: Arc::new(AtomicBool::new(false)),
+            started: Instant::now() - Duration::from_secs(5),
+            paused_since: None,
+            paused_total: Duration::ZERO,
+            mode: CaptureMode::InPerson,
+        };
+        (session, receiver, changes)
+    }
+
+    #[test]
+    fn switching_sources_preserves_the_capture_clock_and_pause_state() {
+        let (mut session, receiver, changes) = switching_session(false);
+        let started = session.started;
+        session.set_mode(CaptureMode::Online).unwrap();
+        assert!(matches!(
+            receiver.recv().unwrap(),
+            CaptureMessage::SetMode(CaptureMode::Online)
+        ));
+        session.pause().unwrap();
+        assert!(matches!(receiver.recv().unwrap(), CaptureMessage::Pause));
+        let paused_since = session.paused_since;
+        session.set_mode(CaptureMode::InPerson).unwrap();
+        assert!(matches!(
+            receiver.recv().unwrap(),
+            CaptureMessage::SetMode(CaptureMode::InPerson)
+        ));
+        assert!(session.is_paused());
+        assert_eq!(session.started, started);
+        assert_eq!(session.paused_since, paused_since);
+        assert!(session.playable_ms() >= 5000);
+        session.set_mode(CaptureMode::InPerson).unwrap();
+        assert!(receiver.try_recv().is_err(), "same source must be a no-op");
+        assert_eq!(*changes.lock().unwrap(), [true, false]);
+    }
+
+    #[test]
+    fn a_failed_source_change_keeps_the_existing_mix() {
+        let (mut session, receiver, changes) = switching_session(true);
+        assert!(session.set_mode(CaptureMode::Online).is_err());
+        assert_eq!(session.mode, CaptureMode::InPerson);
+        assert!(!session.is_paused());
+        assert!(receiver.try_recv().is_err());
+        assert!(changes.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_disconnected_worker_rolls_back_the_audio_tap() {
+        let (mut session, receiver, changes) = switching_session(false);
+        drop(receiver);
+        assert!(session.set_mode(CaptureMode::Online).is_err());
+        assert_eq!(session.mode, CaptureMode::InPerson);
+        assert_eq!(*changes.lock().unwrap(), [true, false]);
+    }
 
     #[test]
     fn resampling_keeps_expected_duration() {

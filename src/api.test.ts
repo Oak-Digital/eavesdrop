@@ -18,6 +18,7 @@ import {
   resetBrowserMock,
   removeWhisperModel,
   resumeRecording,
+  setRecordingMode,
   restoreRecordings,
   startRecording,
   stopRecording,
@@ -75,6 +76,33 @@ describe("browser recording lifecycle", () => {
 
     stopSessionListener();
     stopFinalizedListener();
+  });
+
+  it("changes sources in the same recording and preserves paused time and highlights", async () => {
+    const started = await startRecording({ mode: "in_person" });
+    vi.advanceTimersByTime(2_000);
+    await addHighlight();
+    const online = await setRecordingMode("online");
+    expect(online.recordingId).toBe(started.recordingId);
+    expect(online.startedAt).toBe(started.startedAt);
+    expect(online.playableMs).toBe(2_000);
+    expect(online.phase).toBe("recording");
+    expect(online.mode).toBe("online");
+    await pauseRecording();
+    vi.advanceTimersByTime(1_000);
+    const microphone = await setRecordingMode("in_person");
+    expect(microphone.phase).toBe("paused");
+    expect(microphone.playableMs).toBe(2_000);
+    expect(microphone.mode).toBe("in_person");
+    await resumeRecording();
+    vi.advanceTimersByTime(1_000);
+    const saved = await stopRecording();
+    expect(saved.id).toBe(started.recordingId);
+    expect(saved.playableDurationMs).toBe(3_000);
+    expect(saved.mode).toBe("in_person");
+    expect(saved.highlights[0]?.offsetMs).toBe(2_000);
+    expect(await listRecordings(false)).toHaveLength(1);
+    await expect(setRecordingMode("online")).rejects.toThrow("active recording");
   });
 });
 

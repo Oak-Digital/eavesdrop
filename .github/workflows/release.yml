@@ -175,7 +175,7 @@ jobs:
           tar -czf "$archive" -C "$(dirname "$app_path")" "$(basename "$app_path")"
           npm run tauri signer sign -- --password "" "$archive"
           ditto -c -k --sequesterRsrc --keepParent "$app_path" "$output_dir/Eavesdrop_${APP_VERSION}_universal.zip"
-          hdiutil create -volname Eavesdrop -srcfolder "$app_path" -ov -format UDZO "$disk_image"
+          ./scripts/build-macos-dmg.sh "$app_path" "$disk_image"
           codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$disk_image"
           xcrun notarytool submit "$disk_image" \
             --key "$api_key_path" \
@@ -197,7 +197,7 @@ jobs:
           tar -czf "$archive" -C "$(dirname "$app_path")" "$(basename "$app_path")"
           npm run tauri signer sign -- --password "" "$archive"
           ditto -c -k --sequesterRsrc --keepParent "$app_path" "$output_dir/Eavesdrop_${APP_VERSION}_universal.zip"
-          hdiutil create -volname Eavesdrop -srcfolder "$app_path" -ov -format UDZO "$output_dir/Eavesdrop_${APP_VERSION}_universal.dmg"
+          ./scripts/build-macos-dmg.sh "$app_path" "$output_dir/Eavesdrop_${APP_VERSION}_universal.dmg"
       - uses: actions/upload-artifact@v4
         with:
           name: eavesdrop-macos-${{ needs.validate.outputs.version }}

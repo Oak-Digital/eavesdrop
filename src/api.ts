@@ -8,6 +8,7 @@ import type {
   SummaryTarget,
   AppSnapshot,
   AudioLevels,
+  CaptureMode,
   MeetingCandidate,
   ModelDownloadStatus,
   OakOsIntegration,
@@ -196,6 +197,18 @@ export async function resumeRecording(): Promise<RecordingSession> {
   browserRecordingClock.pausedAtMs = null;
   browserSnapshot.session.phase = "recording";
   updateBrowserSessionTiming(now);
+  emitBrowserSession();
+  return structuredClone(browserSnapshot.session);
+}
+
+export async function setRecordingMode(mode: CaptureMode): Promise<RecordingSession> {
+  if (isTauri()) return command<RecordingSession>("set_recording_mode", { mode });
+  if (!["recording", "paused"].includes(browserSnapshot.session.phase)) {
+    throw new Error("sources can only change during an active recording");
+  }
+  updateBrowserSessionTiming();
+  browserSnapshot.session.mode = mode;
+  browserSnapshot.session.systemLevel = 0;
   emitBrowserSession();
   return structuredClone(browserSnapshot.session);
 }

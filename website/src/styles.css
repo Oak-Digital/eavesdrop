@@ -10,9 +10,9 @@
   --muted: #5f5f68;
   --line: #dedee2;
   --mono: "Geist Mono Variable", monospace;
-  --accent: #6840ce;
-  --accent-warm: #bc3f55;
-  --accent-soft: #eee6ff;
+  --accent: #b31859;
+  --accent-warm: #b63d13;
+  --accent-soft: #ffe8f1;
   --card-radius: 20px;
   --gradient-sunset: linear-gradient(180deg, #ff3cac 0%, #ff174f 28%, #ff4b20 62%, #ff9416 100%);
   --gradient-violet: linear-gradient(135deg, #a17cff 0%, #c780fa 48%, #ef82c5 100%);
@@ -219,12 +219,13 @@ svg {
   color: var(--ink);
 }
 .button.primary {
-  background: #241b32;
+  background: #141416;
   color: #fff;
-  border-color: #241b32;
+  border-color: #141416;
 }
 .button.primary:hover {
-  background: #4a3b55;
+  background: #303034;
+  border-color: #303034;
 }
 .text-link {
   display: inline-flex;
@@ -445,7 +446,7 @@ svg {
 }
 .demo-meeting.selected {
   background: var(--accent-soft);
-  border-color: #e0d6e7;
+  border-color: #f2bdd1;
 }
 .sidebar-foot {
   font-size: 9px;
@@ -565,7 +566,7 @@ svg {
   flex: 1;
   min-width: 2px;
   max-width: 5px;
-  background: var(--accent);
+  background: var(--gradient-sunset);
   border-radius: 1px;
 }
 .audio-timeline {
@@ -738,16 +739,6 @@ svg {
 }
 .download-option .button {
   border-radius: 999px;
-}
-.download-option .button.primary {
-  background: #fff;
-  border-color: #fff;
-  color: #24132f;
-}
-.download-option .button.primary:hover {
-  background: #f3f3f5;
-  border-color: #f3f3f5;
-  color: #24132f;
 }
 .download-option h3 {
   font-size: 21px;

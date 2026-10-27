@@ -20,10 +20,12 @@ import {
 } from "./icons";
 import type { CloudKeyStatus, CloudProvider, SummarySource, AppSnapshot, CaptureMode, ModelDownloadStatus, OakOsProject, Recording, SummarizationStage, SummaryModelInfo, TranscriptionStage, WhisperModelInfo } from "./types";
 import { libraryRecordingAction } from "./recordingAction";
+import { LiveRecording } from "./LiveRecording";
 import { applyTheme } from "./theme";
 import { useAppState } from "./useAppState";
 import { useUpdater } from "./useUpdater";
 import { Select } from "./Select";
+import { SettingsTabs, type SettingsTab } from "./SettingsTabs";
 import Markdown from "react-markdown";
 import { DEFAULT_SUMMARY_TEMPLATE, SUMMARY_TEMPLATE_OPTIONS, summaryTemplate } from "./summaryTemplates";
 import { SummaryTemplateSettings } from "./SummaryTemplateSettings";
@@ -216,6 +218,8 @@ function AudioMeter({ icon, label, value }: { icon: React.ReactNode; label: stri
 
 function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater }) {
   const [page, setPage] = useState<LibraryPage>("recordings");
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
+  const [summarySetup, setSummarySetup] = useState<SummarySource | null>(null);
   const pageRef = useRef<LibraryPage>("recordings");
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [selected, setSelected] = useState<Recording | null>(null);
@@ -346,7 +350,9 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
 
   const handleRecordingAction = async () => {
     if (recordingAction.kind === "open") {
-      await app.showQuickPanel();
+      const recorder = document.getElementById("live-recording");
+      recorder?.scrollIntoView({ block: "nearest" });
+      recorder?.focus({ preventScroll: true });
       return;
     }
     if (recordingAction.kind !== "start") return;
@@ -411,7 +417,7 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
             cloudProvider={app.snapshot.settings.cloudProvider}
             cloudModel={app.snapshot.settings.cloudModel}
             cloudKeyStored={models.cloudKeys.some((key) => key.provider === app.snapshot?.settings.cloudProvider && key.keyStored)}
-            onOpenSummarySettings={() => { setSelected(null); setPage("settings"); }}
+            onOpenSummarySettings={() => { setSelected(null); setSettingsTab("summaries"); setSummarySetup("cloud"); setPage("settings"); }}
             onOpenIntegrations={() => { setSelected(null); setPage("integrations"); }}
             activity={activity}
             onChooseWhisperModel={async () => {
@@ -434,7 +440,7 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
         ) : page === "integrations" ? (
           <IntegrationsPage app={app} />
         ) : page === "settings" ? (
-          <SettingsPage app={app} updater={updater} models={models} />
+          <SettingsPage app={app} updater={updater} models={models} tab={settingsTab} onTabChange={setSettingsTab} initialSummarySetup={summarySetup} />
         ) : (
           <>
             <header className="content-header">
@@ -461,6 +467,17 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
                 )}
               </div>
             </header>
+            {page === "recordings" && (startingFromLibrary || ["starting", "recording", "paused", "finalizing"].includes(app.snapshot.session.phase)) && (
+              <LiveRecording
+                session={startingFromLibrary && !["starting", "recording", "paused", "finalizing"].includes(app.snapshot.session.phase)
+                  ? { ...app.snapshot.session, phase: "starting", mode: "online", playableMs: 0 }
+                  : app.snapshot.session}
+                onPause={app.pause}
+                onResume={app.resume}
+                onStop={app.stop}
+                onModeChange={app.setRecordingMode}
+              />
+            )}
             <div className="list-toolbar">
               <label className="search-field"><SearchIcon /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search recordings" /></label>
               <div className="toolbar-summary">
@@ -1034,8 +1051,9 @@ function EncryptedAudioPlayer({ recording }: { recording: Recording }) {
   );
 }
 
-function SettingsPage({ app, updater, models }: { app: AppController; updater: AppUpdater; models: ModelManager }) {
+function SettingsPage({ app, updater, models, tab, onTabChange, initialSummarySetup }: { app: AppController; updater: AppUpdater; models: ModelManager; tab: SettingsTab; onTabChange: (tab: SettingsTab) => void; initialSummarySetup: SummarySource | null }) {
   const snapshot = app.snapshot!;
+  const [summaryEditor, setSummaryEditor] = useState<SummarySource | null>(initialSummarySetup ?? snapshot.settings.summarySource);
   const [selectedWhisperModel, setSelectedWhisperModel] = useState("base");
   const [selectedSummaryModel, setSelectedSummaryModel] = useState("qwen2.5-1.5b");
   const recordingActive = ["starting", "recording", "paused", "finalizing"].includes(snapshot.session.phase);
@@ -1071,98 +1089,122 @@ function SettingsPage({ app, updater, models }: { app: AppController; updater: A
   const summaryInUse = selectedSummary && snapshot.settings.summarySource === "local" ? modelPathContainsId(snapshot.settings.summaryModelPath, selectedSummary.id) : false;
   return (
     <div className="settings-page">
-      <header className="content-header"><div><h1>Settings</h1><p>Recording sources and app behavior.</p></div></header>
-      <section className="settings-section">
-        <h2>Appearance</h2>
-        <div className="field-label"><label htmlFor="theme">Theme</label><Select id="theme" label="Theme" value={snapshot.settings.theme}
-          onValueChange={(value) => app.updateSettings({ theme: value as AppSnapshot["settings"]["theme"] })}
-          options={[{ value: "light", label: "Light" }, { value: "dark", label: "Dark" }, { value: "system", label: "System" }]} /></div>
-      </section>
-      <section className="settings-section">
-        <h2>Recording</h2>
-        <div className="field-label"><label htmlFor="microphone">Microphone</label><Select id="microphone" label="Microphone" value={snapshot.settings.microphoneId ?? ""}
-          onValueChange={(value) => app.updateSettings({ microphoneId: value || null })}
-          options={[{ value: "", label: "System default" }, ...snapshot.devices.map((device) => ({ value: device.id, label: device.name }))]} /></div>
-        <SettingToggle label="Meeting detection" description="Prompt for Zoom, Teams, and Google Meet calls." checked={snapshot.settings.meetingDetectionEnabled} onChange={(meetingDetectionEnabled) => app.updateSettings({ meetingDetectionEnabled })} />
-      </section>
-      <section className="settings-section">
-        <h2>Local transcription</h2>
-        <div className="model-setting">
-          <div><strong>Open-source Whisper</strong><p>{snapshot.settings.whisperModelPath ? `Using ${modelFileName(snapshot.settings.whisperModelPath)}` : "Install a model once, then transcribe without sending audio anywhere."}</p></div>
-          <div className="model-install-controls">
-            <Select label="Whisper model" value={selectedWhisperModel} onValueChange={setSelectedWhisperModel} placeholder="Choose a model…"
-              options={models.whisperModels.map((model) => ({ value: model.id, label: model.name, description: `${formatSize(model.sizeBytes)}${model.installed ? " · Installed" : ""}` }))} />
-            <button className="button primary" disabled={!selectedModel || modelBusy || whisperInUse} onClick={() => selectedModel?.installed ? models.useWhisper(selectedWhisperModel) : models.installWhisper(selectedWhisperModel)}>{installingModel ? `${modelPercentage}%` : whisperInUse ? "In use" : selectedModel?.installed ? "Use model" : "Install"}</button>
-            {selectedModel?.installed && <button className="button model-delete" disabled={modelBusy} onClick={() => {
-              if (window.confirm(`Delete ${selectedModel.name} from this device?`)) void models.removeWhisper(selectedWhisperModel);
-            }}>Delete</button>}
-            <button className="button secondary" disabled={modelBusy} onClick={async () => {
-              const path = await api.selectWhisperModel();
-              if (path) await app.updateSettings({ whisperModelPath: path });
-            }}>Choose existing…</button>
-          </div>
-          {selectedModel && <p className="model-description">{selectedModel.description}</p>}
-          {installingModel && <progress className="update-progress" max={100} value={modelPercentage} aria-label="Whisper model download progress" />}
-        </div>
-      </section>
-      <section className="settings-section">
-        <h2>Summary models</h2>
-        <div className="summary-default-setting">
-          <label htmlFor="default-summary-source">Default processing</label>
-          <Select id="default-summary-source" label="Default summary processing" value={snapshot.settings.summarySource} options={SUMMARY_SOURCE_OPTIONS}
-            onValueChange={(value) => void app.updateSettings({ summarySource: value as SummarySource })} />
-        </div>
-        <div className="model-setting summary-model-group" role="group" aria-label="Local">
-          <div><strong>Local</strong><p>Download a model and run it on this computer. No transcript is sent to an API provider.</p></div>
-          <div><strong>Open-weight language model</strong><p>{snapshot.settings.summaryModelPath ? `Using ${modelFileName(snapshot.settings.summaryModelPath)}` : "Summaries and suggested titles are written on this computer, from the transcript."}</p></div>
-          <div className="model-install-controls">
-            <Select label="Summary model" value={selectedSummaryModel} onValueChange={setSelectedSummaryModel} placeholder="Choose a model…"
-              options={models.summaryModels.map((model) => ({ value: model.id, label: model.name, description: `${formatSize(model.sizeBytes)}${model.installed ? " · Installed" : ""}` }))} />
-            <button className="button primary" disabled={!selectedSummary || modelBusy || summaryInUse} onClick={() => selectedSummary?.installed ? models.useSummary(selectedSummaryModel) : models.installSummary(selectedSummaryModel)}>{installingSummaryModel ? `${summaryModelPercentage}%` : summaryInUse ? "In use" : selectedSummary?.installed ? "Use model" : "Install"}</button>
-            {selectedSummary?.installed && <button className="button model-delete" disabled={modelBusy} onClick={() => {
-              if (window.confirm(`Delete ${selectedSummary.name} from this device?`)) void models.removeSummary(selectedSummaryModel);
-            }}>Delete</button>}
-            <button className="button secondary" disabled={modelBusy} onClick={async () => {
-              const path = await api.selectSummaryModel();
-              if (path) await app.updateSettings({ summaryModelPath: path, summarySource: "local" });
-            }}>Choose existing…</button>
-          </div>
-          {selectedSummary && <p className="model-description">{selectedSummary.description}</p>}
-          {installingSummaryModel && <progress className="update-progress" max={100} value={summaryModelPercentage} aria-label="Summary model download progress" />}
-        </div>
-        <CloudModelSettings settings={snapshot.settings} keys={models.cloudKeys} keyError={models.cloudKeyError}
-          onSave={app.updateSettings} onKeysChanged={models.reloadCloudKeys} />
-        <SummaryTemplateSettings settings={snapshot.settings} onSave={app.updateSettings} />
-      </section>
-      <section className="settings-section">
-        <h2>General</h2>
-        <SettingToggle label="Launch at login" description="Keep the recorder available in the menu bar or system tray." checked={snapshot.settings.launchAtLogin} onChange={(launchAtLogin) => app.updateSettings({ launchAtLogin })} />
-      </section>
-      <section className="settings-section">
-        <h2>Updates</h2>
-        <div className="update-setting">
-          <div><strong>Eavesdrop {update.currentVersion || ""}</strong><p>{recordingActive && update.phase === "available" ? "Stop the active recording before updating." : update.error && update.phase === "available" ? update.error : updateDescription}</p></div>
-          {update.phase === "available" || update.phase === "downloading" ? (
-            <button className="button primary" disabled={recordingActive || update.phase === "downloading"} onClick={updater.installUpdate}>
-              {update.phase === "downloading" ? `${update.progress ?? 0}%` : "Update & restart"}
-            </button>
-          ) : (
-            <button className="button secondary" disabled={update.phase === "checking"} onClick={updater.checkForUpdates}>{update.phase === "checking" ? "Checking…" : "Check for updates"}</button>
-          )}
-        </div>
-        {update.phase === "downloading" && <progress className="update-progress" max={100} value={update.progress ?? undefined} aria-label="Update download progress" />}
-      </section>
-      <section className="settings-section">
-        <h2>Permissions</h2>
-        <PermissionRow label="Microphone" state={snapshot.permissions.microphone} />
-        <PermissionRow label="Computer audio" state={snapshot.permissions.systemAudio} />
-        <button className="button secondary" onClick={app.requestPermissions}>Check permissions</button>
-      </section>
-      <section className="settings-section">
-        <h2>Diagnostics</h2>
-        <p className="settings-description">Local event logs exclude audio, keys, meeting titles, and window contents. Logs expire after seven days.</p>
-        <button className="button secondary" onClick={() => api.exportDiagnostics()}>Export diagnostics</button>
-      </section>
+      <header className="content-header"><div><h1>Settings</h1></div></header>
+      <SettingsTabs value={tab} onValueChange={onTabChange} panels={{
+        general: <>
+          <section className="settings-section">
+            <h2>Appearance</h2>
+            <div className="field-label"><label htmlFor="theme">Theme</label><Select id="theme" label="Theme" value={snapshot.settings.theme}
+              onValueChange={(value) => app.updateSettings({ theme: value as AppSnapshot["settings"]["theme"] })}
+              options={[{ value: "light", label: "Light" }, { value: "dark", label: "Dark" }, { value: "system", label: "System" }]} /></div>
+          </section>
+          <section className="settings-section">
+            <h2>Startup</h2>
+            <SettingToggle label="Launch at login" description="Keep the recorder available in the menu bar or system tray." checked={snapshot.settings.launchAtLogin} onChange={(launchAtLogin) => app.updateSettings({ launchAtLogin })} />
+          </section>
+        </>,
+        recording: <>
+          <section className="settings-section">
+            <h2>Recording</h2>
+            <div className="field-label"><label htmlFor="microphone">Microphone</label><Select id="microphone" label="Microphone" value={snapshot.settings.microphoneId ?? ""}
+              onValueChange={(value) => app.updateSettings({ microphoneId: value || null })}
+              options={[{ value: "", label: "System default" }, ...snapshot.devices.map((device) => ({ value: device.id, label: device.name }))]} /></div>
+            <SettingToggle label="Meeting detection" description="Prompt for Zoom, Teams, and Google Meet calls." checked={snapshot.settings.meetingDetectionEnabled} onChange={(meetingDetectionEnabled) => app.updateSettings({ meetingDetectionEnabled })} />
+          </section>
+          <section className="settings-section">
+            <h2>Permissions</h2>
+            <PermissionRow label="Microphone" state={snapshot.permissions.microphone} />
+            <PermissionRow label="Computer audio" state={snapshot.permissions.systemAudio} />
+            <button className="button secondary" onClick={app.requestPermissions}>Check permissions</button>
+          </section>
+        </>,
+        transcription: <>
+          <section className="settings-section">
+            <h2>Local transcription</h2>
+            <div className="model-setting">
+              <div><strong>Open-source Whisper</strong><p>{snapshot.settings.whisperModelPath ? `Using ${modelFileName(snapshot.settings.whisperModelPath)}` : "Install a model once, then transcribe without sending audio anywhere."}</p></div>
+              <div className="model-install-controls">
+                <Select label="Whisper model" value={selectedWhisperModel} onValueChange={setSelectedWhisperModel} placeholder="Choose a model…"
+                  options={models.whisperModels.map((model) => ({ value: model.id, label: model.name, description: `${formatSize(model.sizeBytes)}${model.installed ? " · Installed" : ""}` }))} />
+                <button className="button primary" disabled={!selectedModel || modelBusy || whisperInUse} onClick={() => selectedModel?.installed ? models.useWhisper(selectedWhisperModel) : models.installWhisper(selectedWhisperModel)}>{installingModel ? `${modelPercentage}%` : whisperInUse ? "In use" : selectedModel?.installed ? "Use model" : "Install"}</button>
+                {selectedModel?.installed && <button className="button model-delete" disabled={modelBusy} onClick={() => {
+                  if (window.confirm(`Delete ${selectedModel.name} from this device?`)) void models.removeWhisper(selectedWhisperModel);
+                }}>Delete</button>}
+                <button className="button secondary" disabled={modelBusy} onClick={async () => {
+                  const path = await api.selectWhisperModel();
+                  if (path) await app.updateSettings({ whisperModelPath: path });
+                }}>Choose existing…</button>
+              </div>
+              {selectedModel && <p className="model-description">{selectedModel.description}</p>}
+              {installingModel && <progress className="update-progress" max={100} value={modelPercentage} aria-label="Whisper model download progress" />}
+            </div>
+          </section>
+        </>,
+        summaries: <>
+          <section className="settings-section">
+            <h2>Summary processing</h2>
+            <div className="summary-default-setting">
+              <label htmlFor="default-summary-source">Default processing</label>
+              <Select id="default-summary-source" label="Default summary processing" value={snapshot.settings.summarySource} options={SUMMARY_SOURCE_OPTIONS}
+                onValueChange={(value) => { setSummaryEditor(value as SummarySource); void app.updateSettings({ summarySource: value as SummarySource }); }} />
+            </div>
+            <details className="settings-model-details" open={summaryEditor === "local"}>
+              <summary onClick={(event) => { event.preventDefault(); setSummaryEditor(summaryEditor === "local" ? null : "local"); }}>
+                Local model<span>{snapshot.settings.summarySource === "local" ? "Default" : "Configure"}</span>
+              </summary>
+            <div className="model-setting summary-model-group" role="group" aria-label="Local">
+              <div><strong>Open-weight language model</strong><p>{snapshot.settings.summaryModelPath ? `Using ${modelFileName(snapshot.settings.summaryModelPath)}` : "Summaries and suggested titles are written on this computer, from the transcript."}</p></div>
+              <div className="model-install-controls">
+                <Select label="Summary model" value={selectedSummaryModel} onValueChange={setSelectedSummaryModel} placeholder="Choose a model…"
+                  options={models.summaryModels.map((model) => ({ value: model.id, label: model.name, description: `${formatSize(model.sizeBytes)}${model.installed ? " · Installed" : ""}` }))} />
+                <button className="button primary" disabled={!selectedSummary || modelBusy || summaryInUse} onClick={() => selectedSummary?.installed ? models.useSummary(selectedSummaryModel) : models.installSummary(selectedSummaryModel)}>{installingSummaryModel ? `${summaryModelPercentage}%` : summaryInUse ? "In use" : selectedSummary?.installed ? "Use model" : "Install"}</button>
+                {selectedSummary?.installed && <button className="button model-delete" disabled={modelBusy} onClick={() => {
+                  if (window.confirm(`Delete ${selectedSummary.name} from this device?`)) void models.removeSummary(selectedSummaryModel);
+                }}>Delete</button>}
+                <button className="button secondary" disabled={modelBusy} onClick={async () => {
+                  const path = await api.selectSummaryModel();
+                  if (path) await app.updateSettings({ summaryModelPath: path, summarySource: "local" });
+                }}>Choose existing…</button>
+              </div>
+              {selectedSummary && <p className="model-description">{selectedSummary.description}</p>}
+              {installingSummaryModel && <progress className="update-progress" max={100} value={summaryModelPercentage} aria-label="Summary model download progress" />}
+            </div>
+            </details>
+            <details className="settings-model-details" open={summaryEditor === "cloud"}>
+              <summary onClick={(event) => { event.preventDefault(); setSummaryEditor(summaryEditor === "cloud" ? null : "cloud"); }}>
+                Cloud provider<span>{snapshot.settings.summarySource === "cloud" ? "Default" : "Configure"}</span>
+              </summary>
+            <CloudModelSettings settings={snapshot.settings} keys={models.cloudKeys} keyError={models.cloudKeyError}
+              onSave={app.updateSettings} onKeysChanged={models.reloadCloudKeys} />
+            </details>
+          </section>
+          <section className="settings-section">
+            <h2>Summary template</h2>
+            <SummaryTemplateSettings settings={snapshot.settings} onSave={app.updateSettings} />
+          </section>
+        </>,
+        about: <>
+          <section className="settings-section">
+            <h2>Updates</h2>
+            <div className="update-setting">
+              <div><strong>Eavesdrop {update.currentVersion || ""}</strong><p>{recordingActive && update.phase === "available" ? "Stop the active recording before updating." : update.error && update.phase === "available" ? update.error : updateDescription}</p></div>
+              {update.phase === "available" || update.phase === "downloading" ? (
+                <button className="button primary" disabled={recordingActive || update.phase === "downloading"} onClick={updater.installUpdate}>
+                  {update.phase === "downloading" ? `${update.progress ?? 0}%` : "Update & restart"}
+                </button>
+              ) : (
+                <button className="button secondary" disabled={update.phase === "checking"} onClick={updater.checkForUpdates}>{update.phase === "checking" ? "Checking…" : "Check for updates"}</button>
+              )}
+            </div>
+            {update.phase === "downloading" && <progress className="update-progress" max={100} value={update.progress ?? undefined} aria-label="Update download progress" />}
+          </section>
+          <section className="settings-section">
+            <h2>Diagnostics</h2>
+            <p className="settings-description">Local event logs exclude audio, keys, meeting titles, and window contents. Logs expire after seven days.</p>
+            <button className="button secondary" onClick={() => api.exportDiagnostics()}>Export diagnostics</button>
+          </section>
+        </>,
+      }} />
     </div>
   );
 }

@@ -28,6 +28,15 @@ impl CaptureBackend for FallbackCaptureBackend {
     fn stop(&mut self) {
         self.microphone.take();
     }
+
+    fn set_system_audio(&mut self, enabled: bool, _: Sender<CaptureMessage>) -> AppResult<()> {
+        if enabled {
+            return Err(AppError::Audio(
+                "computer audio capture is supported on macOS and Windows".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 pub fn permission_state(_: bool) -> PermissionState {
     PermissionState {

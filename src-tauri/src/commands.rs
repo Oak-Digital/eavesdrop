@@ -9,8 +9,8 @@ use crate::{
     diagnostics::Diagnostics,
     error::{AppError, AppResult},
     models::{
-        AppSnapshot, ModelDownloadStatus, OnboardingSettings, Recording, RecordingSession,
-        SettingsPatch, StartRecordingInput, SummaryModelInfo, WhisperModelInfo,
+        AppSnapshot, CaptureMode, ModelDownloadStatus, OnboardingSettings, Recording,
+        RecordingSession, SettingsPatch, StartRecordingInput, SummaryModelInfo, WhisperModelInfo,
     },
     oakos::{self, OakOsIntegration, OakOsProject, OakOsPublishResult},
     state::AppState,
@@ -118,6 +118,16 @@ pub fn pause_recording(app: AppHandle, state: State<'_, AppState>) -> AppResult<
 #[tauri::command]
 pub fn resume_recording(app: AppHandle, state: State<'_, AppState>) -> AppResult<RecordingSession> {
     state.resume(&app)
+}
+
+#[tauri::command]
+pub async fn set_recording_mode(app: AppHandle, mode: CaptureMode) -> AppResult<RecordingSession> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        state.set_recording_mode(&app, mode)
+    })
+    .await
+    .map_err(|error| AppError::Audio(format!("source switch failed: {error}")))?
 }
 
 #[tauri::command]

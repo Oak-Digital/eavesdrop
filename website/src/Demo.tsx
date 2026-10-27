@@ -26,7 +26,7 @@ export default function Demo() {
       <div className="product-body">
         <aside className="demo-sidebar" aria-label="Example library">
           <div className="demo-brand">
-            <Icon name="wave" size={22} /> eavesdrop
+            <Icon name="wave" size={22} gradient /> eavesdrop
           </div>
           <div className="sidebar-label">
             <Icon name="file" size={16} /> Recordings <span>3</span>

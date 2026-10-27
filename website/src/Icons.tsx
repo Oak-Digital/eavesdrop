@@ -1,8 +1,9 @@
-import type { CSSProperties } from "react";
+import { useId, type CSSProperties } from "react";
 export function Icon({
   name,
   size = 20,
   style,
+  gradient = false,
 }: {
   name:
     | "arrow"
@@ -18,7 +19,9 @@ export function Icon({
     | "replay";
   size?: number;
   style?: CSSProperties;
+  gradient?: boolean;
 }) {
+  const gradientId = useId();
   const paths = {
     arrow: <path d="M5 12h14m-6-6 6 6-6 6" />,
     download: (
@@ -70,13 +73,23 @@ export function Icon({
       height={size}
       viewBox="0 0 24 24"
       fill="none"
-      stroke="currentColor"
+      stroke={gradient ? `url(#${gradientId})` : "currentColor"}
       strokeWidth="1.5"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
       style={style}
     >
+      {gradient && (
+        <defs>
+          <linearGradient id={gradientId} x1="0" y1="2" x2="0" y2="22" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor="#ff3cac" />
+            <stop offset="28%" stopColor="#ff174f" />
+            <stop offset="62%" stopColor="#ff4b20" />
+            <stop offset="100%" stopColor="#ff9416" />
+          </linearGradient>
+        </defs>
+      )}
       {paths[name]}
     </svg>
   );

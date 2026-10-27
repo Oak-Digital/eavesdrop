@@ -3,7 +3,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc::Sender,
+        mpsc::{self, Sender},
     },
     thread::{self, JoinHandle},
 };
@@ -32,22 +32,60 @@ impl CaptureBackend for WindowsCaptureBackend {
         sender: Sender<CaptureMessage>,
     ) -> AppResult<()> {
         self.microphone = Some(start_microphone_stream(microphone_id, sender.clone())?);
-        if mode == CaptureMode::Online {
+        self.set_system_audio(mode == CaptureMode::Online, sender)
+    }
+
+    fn set_system_audio(&mut self, enabled: bool, sender: Sender<CaptureMessage>) -> AppResult<()> {
+        if enabled {
+            if self.loopback_thread.is_some() {
+                return Ok(());
+            }
             let stop = Arc::new(AtomicBool::new(false));
             let thread_stop = stop.clone();
             let thread_sender = sender.clone();
+            let (ready_sender, ready_receiver) = mpsc::channel();
             let handle = thread::Builder::new()
                 .name("eavesdrop-wasapi-loopback".into())
                 .spawn(move || {
-                    if let Err(error) = capture_loopback(thread_sender.clone(), thread_stop) {
-                        let _ = thread_sender.send(CaptureMessage::Warning(format!(
-                            "Computer audio interrupted: {error}"
-                        )));
+                    let mut initialized = false;
+                    if let Err(error) = capture_loopback(
+                        thread_sender.clone(),
+                        thread_stop,
+                        &ready_sender,
+                        &mut initialized,
+                    ) {
+                        // Before initialization, report the failure to the
+                        // caller so the current source selection stays intact.
+                        if initialized {
+                            let _ = thread_sender.send(CaptureMessage::Warning(format!(
+                                "Computer audio interrupted: {error}"
+                            )));
+                        } else {
+                            let _ = ready_sender.send(Err(error.to_string()));
+                        }
                     }
                 })
                 .map_err(|error| AppError::Audio(error.to_string()))?;
+            match ready_receiver.recv() {
+                Ok(Ok(())) => {}
+                result => {
+                    stop.store(true, Ordering::SeqCst);
+                    let _ = handle.join();
+                    return Err(AppError::Audio(match result {
+                        Ok(Err(error)) => error,
+                        _ => "computer audio capture did not start".into(),
+                    }));
+                }
+            }
             self.loopback_stop = Some(stop);
             self.loopback_thread = Some(handle);
+        } else {
+            if let Some(stop) = self.loopback_stop.take() {
+                stop.store(true, Ordering::SeqCst);
+            }
+            if let Some(handle) = self.loopback_thread.take() {
+                let _ = handle.join();
+            }
         }
         Ok(())
     }
@@ -66,6 +104,8 @@ impl CaptureBackend for WindowsCaptureBackend {
 fn capture_loopback(
     sender: Sender<CaptureMessage>,
     stop: Arc<AtomicBool>,
+    ready: &Sender<Result<(), String>>,
+    initialized: &mut bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     initialize_mta().ok()?;
     let enumerator = DeviceEnumerator::new()?;
@@ -82,6 +122,8 @@ fn capture_loopback(
     let capture_client = audio_client.get_audiocaptureclient()?;
     let mut bytes = VecDeque::new();
     audio_client.start_stream()?;
+    *initialized = true;
+    let _ = ready.send(Ok(()));
     while !stop.load(Ordering::Relaxed) {
         capture_client.read_from_device_to_deque(&mut bytes)?;
         let sample_count = bytes.len() / 4;

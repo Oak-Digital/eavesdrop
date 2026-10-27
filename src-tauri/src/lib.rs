@@ -47,6 +47,7 @@ pub fn run() {
             commands::start_recording,
             commands::pause_recording,
             commands::resume_recording,
+            commands::set_recording_mode,
             commands::add_highlight,
             commands::stop_recording,
             commands::list_recordings,

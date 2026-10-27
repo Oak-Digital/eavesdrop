@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "./api";
-import type { AppSnapshot, AudioLevels, MeetingCandidate, RecordingSession, StartRecordingInput } from "./types";
+import type { AppSnapshot, AudioLevels, CaptureMode, MeetingCandidate, RecordingSession, StartRecordingInput } from "./types";
 
 export function useAppState() {
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
@@ -120,6 +120,7 @@ export function useAppState() {
     start: async (input: StartRecordingInput) => setSession(await run(() => api.startRecording(input))),
     pause: async () => setSession(await run(api.pauseRecording)),
     resume: async () => setSession(await run(api.resumeRecording)),
+    setRecordingMode: async (mode: CaptureMode) => setSession(await run(() => api.setRecordingMode(mode))),
     highlight: async () => setSession(await run(api.addHighlight)),
     stop: async () => run(api.stopRecording),
     showQuickPanel: async () => { await run(api.showQuickPanel); },

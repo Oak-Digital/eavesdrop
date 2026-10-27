@@ -293,6 +293,18 @@ impl Repository {
         Ok(())
     }
 
+    pub fn set_recording_mode(&self, id: &str, mode: CaptureMode) -> AppResult<()> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| AppError::Storage("database lock poisoned".into()))?;
+        connection.execute(
+            "UPDATE recordings SET mode=?2, updated_at=?3 WHERE id=?1",
+            params![id, mode_string(mode), Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
     pub fn add_highlight(&self, recording_id: &str, offset_ms: i64) -> AppResult<()> {
         let now = Utc::now().to_rfc3339();
         let connection = self

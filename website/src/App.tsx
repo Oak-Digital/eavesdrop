@@ -24,7 +24,7 @@ function Brand() {
   return (
     <div className="brand-lockup">
       <a className="brand" href="#" aria-label="Eavesdrop home">
-        <Icon name="wave" size={25} />
+        <Icon name="wave" size={25} gradient />
         <span>eavesdrop</span>
       </a>
       <a className="brand-maker" href="https://www.oak.dk/">

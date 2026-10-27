@@ -72,10 +72,13 @@ Build a universal macOS application and DMG on macOS:
 
 ```sh
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
-npm run tauri build -- --target universal-apple-darwin --bundles app,dmg
+npm run tauri build -- --target universal-apple-darwin --bundles app
 # Keep the development identity stable across unsigned pilot builds:
 ./scripts/sign-macos-local.sh src-tauri/target/universal-apple-darwin/release/bundle/macos/Eavesdrop.app
+./scripts/build-macos-dmg.sh src-tauri/target/universal-apple-darwin/release/bundle/macos/Eavesdrop.app release/Eavesdrop_universal.dmg
 ```
+
+The DMG includes Eavesdrop and an Applications shortcut. Open the DMG, drag Eavesdrop onto Applications, then eject the disk image and launch Eavesdrop from Applications. Both signed and ad-hoc releases use the same DMG packaging script; signing and notarization of the release DMG happen after packaging.
 
 Updater artifacts require `TAURI_SIGNING_PRIVATE_KEY` or `TAURI_SIGNING_PRIVATE_KEY_PATH`. For a local app-only build that does not publish an update, use `npm run bundle:mac`; it disables updater artifact generation for that build and applies the stable pilot signature.
 

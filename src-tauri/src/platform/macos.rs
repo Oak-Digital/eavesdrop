@@ -27,7 +27,14 @@ impl CaptureBackend for MacCaptureBackend {
         sender: Sender<CaptureMessage>,
     ) -> AppResult<()> {
         self.microphone = Some(start_microphone_stream(microphone_id, sender.clone())?);
-        if mode == CaptureMode::Online {
+        self.set_system_audio(mode == CaptureMode::Online, sender)
+    }
+
+    fn set_system_audio(&mut self, enabled: bool, sender: Sender<CaptureMessage>) -> AppResult<()> {
+        if enabled {
+            if self.system_audio.is_some() {
+                return Ok(());
+            }
             let content = SCShareableContent::get().map_err(|error| {
                 AppError::Permission(format!(
                     "Screen Recording permission is required for computer audio. Enable Eavesdrop in System Settings, then quit and reopen it. ({error})"
@@ -85,6 +92,13 @@ impl CaptureBackend for MacCaptureBackend {
                 AppError::Permission(format!("computer audio permission is required: {error}"))
             })?;
             self.system_audio = Some(stream);
+        } else {
+            if let Some(stream) = self.system_audio.as_mut() {
+                stream
+                    .stop_capture()
+                    .map_err(|error| AppError::Audio(error.to_string()))?;
+            }
+            self.system_audio.take();
         }
         Ok(())
     }

@@ -216,6 +216,36 @@ impl AppState {
         emit_session(app, &runtime)
     }
 
+    pub fn set_recording_mode(
+        &self,
+        app: &AppHandle,
+        mode: CaptureMode,
+    ) -> AppResult<RecordingSession> {
+        let mut runtime = self
+            .runtime
+            .lock()
+            .map_err(|_| AppError::State("recording lock poisoned".into()))?;
+        if !matches!(
+            runtime.phase,
+            RecordingPhase::Recording | RecordingPhase::Paused
+        ) {
+            return Err(AppError::State(
+                "sources can only change during an active recording".into(),
+            ));
+        }
+        let active = runtime
+            .active
+            .as_mut()
+            .ok_or_else(|| AppError::State("no recording is active".into()))?;
+        active.capture.set_mode(mode)?;
+        active.mode = mode;
+        let saved = self.repository.set_recording_mode(&active.id, mode);
+        // Publish the actual capture state even if saving the label fails.
+        let session = emit_session(app, &runtime);
+        saved?;
+        session
+    }
+
     pub fn highlight(&self, app: &AppHandle) -> AppResult<RecordingSession> {
         let runtime = self
             .runtime
