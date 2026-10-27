@@ -19,7 +19,6 @@ import {
   removeWhisperModel,
   resumeRecording,
   setRecordingMode,
-  restoreRecordings,
   startRecording,
   stopRecording,
   summarizeRecording,
@@ -101,7 +100,7 @@ describe("browser recording lifecycle", () => {
     expect(saved.playableDurationMs).toBe(3_000);
     expect(saved.mode).toBe("in_person");
     expect(saved.highlights[0]?.offsetMs).toBe(2_000);
-    expect(await listRecordings(false)).toHaveLength(1);
+    expect(await listRecordings()).toHaveLength(1);
     await expect(setRecordingMode("online")).rejects.toThrow("active recording");
   });
 });
@@ -109,19 +108,24 @@ describe("browser recording lifecycle", () => {
 describe("bulk recording actions", () => {
   beforeEach(resetBrowserMock);
 
-  it("moves and restores multiple recordings together", async () => {
+  it("permanently removes only the selected recordings", async () => {
     await startRecording({ mode: "in_person" });
     const first = await stopRecording();
     await startRecording({ mode: "online" });
     const second = await stopRecording();
+    await startRecording({ mode: "online" });
+    const keep = await stopRecording();
 
     await deleteRecordings([first.id, second.id]);
-    expect(await listRecordings(false)).toHaveLength(0);
-    expect(await listRecordings(true)).toHaveLength(2);
+    expect((await listRecordings()).map((item) => item.id)).toEqual([keep.id]);
+    await expect(deleteRecordings([first.id])).rejects.toThrow("Recording not found");
+  });
 
-    await restoreRecordings([first.id, second.id]);
-    expect(await listRecordings(false)).toHaveLength(2);
-    expect(await listRecordings(true)).toHaveLength(0);
+  it("validates the entire selection before deleting", async () => {
+    await startRecording({ mode: "online" });
+    const recording = await stopRecording();
+    await expect(deleteRecordings([recording.id, "missing"])).rejects.toThrow("Recording not found");
+    expect(await listRecordings()).toHaveLength(1);
   });
 });
 
@@ -176,7 +180,7 @@ describe("summary titles", () => {
     const summarized = await summarizeRecording(recording.id);
 
     expect(summarized.title).toBe(summarized.summary?.suggestedTitle);
-    expect((await listRecordings(false))[0].title).toBe("Example local summary");
+    expect((await listRecordings())[0].title).toBe("Example local summary");
   });
 });
 

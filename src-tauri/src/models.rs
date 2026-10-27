@@ -38,6 +38,10 @@ pub struct TranscriptSegment {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Transcript {
+    #[serde(default)]
+    pub source: Option<crate::cloud_transcription::TranscriptionSource>,
+    #[serde(default)]
+    pub model: Option<String>,
     pub text: String,
     pub language: Option<String>,
     pub created_at: String,
@@ -147,6 +151,7 @@ pub struct TranscriptionProgress {
 pub enum TranscriptionStage {
     Decoding,
     Transcribing,
+    CloudTranscribing,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -255,6 +260,12 @@ impl ThemePreference {
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     #[serde(default)]
+    pub auto_transcribe: bool,
+    #[serde(default)]
+    pub auto_summarize: bool,
+    #[serde(default)]
+    pub transcription_source: crate::cloud_transcription::TranscriptionSource,
+    #[serde(default)]
     pub summary_source: crate::cloud_summarization::SummarySource,
     #[serde(default)]
     pub cloud_provider: crate::cloud_summarization::CloudProvider,
@@ -275,6 +286,8 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            auto_transcribe: false,
+            auto_summarize: false,
             onboarding_completed: false,
             meeting_detection_enabled: true,
             launch_at_login: false,
@@ -285,6 +298,7 @@ impl Default for AppSettings {
             summary_prompt: None,
             summary_template: crate::summary_templates::default_id(),
             summary_source: Default::default(),
+            transcription_source: Default::default(),
             cloud_provider: Default::default(),
             cloud_model: crate::cloud_summarization::default_model(),
         }
@@ -310,6 +324,9 @@ pub struct StartRecordingInput {
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsPatch {
+    pub auto_transcribe: Option<bool>,
+    pub auto_summarize: Option<bool>,
+    pub transcription_source: Option<crate::cloud_transcription::TranscriptionSource>,
     pub summary_source: Option<crate::cloud_summarization::SummarySource>,
     pub cloud_provider: Option<crate::cloud_summarization::CloudProvider>,
     pub cloud_model: Option<String>,

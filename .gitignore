@@ -8,6 +8,9 @@ src-tauri/gen/schemas/
 .DS_Store
 *.log
 website/src/hairline/recorder.generated.js
+website/src/hairline/vault.generated.js
+website/scripts/hairline/hairline-vault.html
+website/scripts/hairline/hairline-vault-*.png
 website/scripts/hairline/hairline-recorder.html
 website/scripts/hairline/hairline-recorder-*.png
 *.key

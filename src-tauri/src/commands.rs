@@ -51,6 +51,9 @@ pub fn update_settings(
         apply_autostart(&app, value)?;
     }
     let updated = state.update_settings(&settings)?;
+    #[cfg(target_os = "macos")]
+    crate::sync_library_appearance(&app, updated.theme)
+        .map_err(|error| AppError::Other(error.to_string()))?;
     let _ = app.emit("settings-changed", updated);
     state.snapshot(false)
 }
@@ -89,11 +92,6 @@ pub async fn publish_recording_to_oakos(
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let recording = state.repository.recording(&id)?;
-        if recording.deleted_at.is_some() {
-            return Err(AppError::Other(
-                "restore this recording before publishing it".into(),
-            ));
-        }
         let audio = state.decrypt_recording(&id)?;
         oakos::publish_recording(&project_id, &recording.id, &recording.title, audio)
     })
@@ -141,11 +139,8 @@ pub fn stop_recording(app: AppHandle, state: State<'_, AppState>) -> AppResult<R
 }
 
 #[tauri::command]
-pub fn list_recordings(
-    state: State<'_, AppState>,
-    include_deleted: bool,
-) -> AppResult<Vec<Recording>> {
-    state.repository.list_recordings(include_deleted)
+pub fn list_recordings(state: State<'_, AppState>) -> AppResult<Vec<Recording>> {
+    state.repository.list_recordings()
 }
 
 #[tauri::command]
@@ -159,22 +154,12 @@ pub fn rename_recording(
 
 #[tauri::command]
 pub fn delete_recording(state: State<'_, AppState>, id: String) -> AppResult<()> {
-    state.repository.set_deleted(&id, true)
-}
-
-#[tauri::command]
-pub fn restore_recording(state: State<'_, AppState>, id: String) -> AppResult<()> {
-    state.repository.set_deleted(&id, false)
+    state.delete_recordings(&[id])
 }
 
 #[tauri::command]
 pub fn delete_recordings(state: State<'_, AppState>, ids: Vec<String>) -> AppResult<()> {
-    state.repository.set_deleted_many(&ids, true)
-}
-
-#[tauri::command]
-pub fn restore_recordings(state: State<'_, AppState>, ids: Vec<String>) -> AppResult<()> {
-    state.repository.set_deleted_many(&ids, false)
+    state.delete_recordings(&ids)
 }
 
 #[tauri::command]
@@ -189,9 +174,14 @@ pub fn get_recording_audio(state: State<'_, AppState>, id: String) -> AppResult<
 }
 
 #[tauri::command]
-pub async fn transcribe_recording(app: AppHandle, id: String) -> AppResult<Recording> {
+pub async fn transcribe_recording(
+    app: AppHandle,
+    id: String,
+    target: Option<crate::cloud_transcription::TranscriptionTarget>,
+) -> AppResult<Recording> {
     tauri::async_runtime::spawn_blocking(move || {
-        app.state::<AppState>().transcribe_recording(&app, &id)
+        app.state::<AppState>()
+            .transcribe_recording(&app, &id, target)
     })
     .await
     .map_err(|error| AppError::Other(format!("transcription task failed: {error}")))?
@@ -437,4 +427,15 @@ pub async fn remove_cloud_api_key(
     tauri::async_runtime::spawn_blocking(move || crate::cloud_summarization::remove_key(provider))
         .await
         .map_err(|_| AppError::Other("could not remove cloud API key".into()))?
+}
+
+#[tauri::command]
+pub fn get_automatic_processing_status(
+    state: State<'_, AppState>,
+) -> AppResult<Option<crate::automatic_processing::AutomaticProcessingStatus>> {
+    Ok(state
+        .automatic_status
+        .lock()
+        .map_err(|_| AppError::State("processing status lock poisoned".into()))?
+        .clone())
 }

@@ -662,12 +662,27 @@ svg {
 .privacy-illustration {
   display: grid;
   place-items: center;
+  min-width: 0;
 }
-.privacy-illustration pre {
-  font-family: var(--mono);
-  font-size: 14px;
-  line-height: 1.7;
-  color: var(--accent);
+.vault-stage[data-hairline] {
+  --hairline-plate: #fff;
+  --hairline-edge: #53535d;
+  --hairline-hi: #25252d;
+  --hairline-lo: #c3c3ca;
+  --hairline-mid: #92929d;
+  width: 100%;
+  max-width: 440px;
+}
+.vault-caption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  max-width: 360px;
+  min-height: 44px;
+  color: var(--muted);
+  font-size: 10px;
 }
 .privacy-copy > svg {
   margin-bottom: 20px;
@@ -1026,9 +1041,6 @@ svg {
   .privacy {
     gap: 36px;
   }
-  .privacy-illustration pre {
-    font-size: 12px;
-  }
   .faq {
     gap: 36px;
   }
@@ -1209,7 +1221,9 @@ svg {
     gap: 0;
   }
   .privacy-illustration {
-    display: none;
+    width: 100%;
+    max-width: 360px;
+    margin: 0 auto 36px;
   }
   .privacy-copy p {
     font-size: 13px;

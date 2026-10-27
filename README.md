@@ -1,6 +1,6 @@
 # Eavesdrop
 
-Eavesdrop is a tray-first meeting recorder for macOS 13+ and Windows 10/11. It records a selected microphone alone or mixes it with computer audio, writes recoverable two-second AAC fragments, and keeps the finalized M4A library encrypted until the user explicitly plays or exports a recording.
+Eavesdrop is a tray-first meeting recorder for macOS 13+ and Windows 10/11. It records a selected microphone alone or mixes it with computer audio, writes recoverable two-second AAC fragments, and keeps the finalized M4A library encrypted at rest.
 
 ## Run locally
 
@@ -21,13 +21,29 @@ The interface draws from [ascii-reveal](https://quanhoangindex.github.io/ascii-r
 
 ## macOS app icon
 
-The Dock and Command-Tab icon uses a glass version of the five-bar waveform, with a frosted silver tile and translucent indigo bars. Its transparent master is `assets/icon-macos-glass.png`; regenerate the bundled `src-tauri/icons/icon.icns` on macOS with `npm run icon:mac`. The icon set includes standard and Retina representations from 16 to 1024 pixels. Rebuild and relaunch the app to see changes to the bundled icon. The flat vector mark in `assets/icon.svg` remains available for interface use.
+The Dock and Command-Tab icon uses a glass version of the five-bar waveform, with a frosted pearl tile and translucent orange bars with warm amber reflections. Its transparent master is `assets/icon-macos-glass.png`; regenerate the bundled `src-tauri/icons/icon.icns` on macOS with `npm run icon:mac`. The icon set includes standard and Retina representations from 16 to 1024 pixels. Rebuild and relaunch the app to see changes to the bundled icon. The flat vector mark in `assets/icon.svg` remains available for interface use.
+
+On macOS, the library sidebar uses the native Sidebar visual-effect material with a subtle theme tint. The material follows window focus and the app’s Light, Dark, or System appearance. The main content stays opaque, and Reduce Transparency uses an opaque sidebar. Windows and browser previews retain the standard solid sidebar.
+
+## Automatic processing
+
+**Settings → Transcription → Auto transcribe** starts transcription after a new recording is saved. **Settings → Summaries → Auto summarize** starts a summary after a successful transcription, including manual transcription. Both default to off, persist across restarts, and use the selected default processing source, model, and summary template. Enabling them does not process older recordings.
+
+Automatic work runs in the native app even with the library hidden and waits for other transcription or summary work to finish. Disabling a toggle skips waiting work; a request already running finishes normally. Errors appear in the library and can be retried manually. Pending work is not resumed after quitting the app. With Cloud selected, the enabled toggle sends audio or transcripts to the selected provider automatically and provider charges may apply.
+
+## Cloud transcription
+
+Settings → Transcription lets you choose Local or Cloud as the default. Cloud uses OpenAI's `gpt-transcribe` with your API key, shared with OpenAI summaries. Each recording also has its own processing selector, and cloud actions explicitly state that audio is uploaded and provider charges may apply. Local Whisper remains the default after upgrading.
+
+Cloud audio stays in memory: recordings under 24 MB are uploaded as M4A, while larger recordings are decoded and split into 16 kHz mono WAV chunks of at most ten minutes, preferring quiet split points. No plaintext temporary audio files are written. Requests are not automatically retried, and a failed request or chunk leaves the previous transcript intact. The resulting text and detected languages are saved with provider/model provenance. Cloud transcripts are displayed without fabricated timestamps.
+
+API reference: [OpenAI file transcription](https://developers.openai.com/api/docs/guides/speech-to-text).
 
 ## Local transcription
 
 Eavesdrop embeds the open-source [`whisper.cpp`](https://github.com/ggml-org/whisper.cpp) engine. Transcription happens on-device: decrypted audio is decoded and processed in memory and is never uploaded or written to a plaintext working file.
 
-1. Open **Settings → Local transcription**, choose Tiny, Base, or Small, and select **Install**. Base is the recommended starting point.
+1. Open **Settings → Transcription**, choose Tiny, Base, or Small under **Local transcription**, and select **Install**. Base is the recommended starting point.
 2. Eavesdrop downloads the model from the [official whisper.cpp model repository](https://huggingface.co/ggerganov/whisper.cpp/tree/main), verifies its published fingerprint, and selects it automatically.
 3. Open a finished recording and select **Transcribe**. Eavesdrop saves the timestamped transcript in its local library.
 
@@ -39,7 +55,7 @@ Larger models are generally more accurate but need more memory and take longer t
 
 For Cloud, choose OpenAI or Anthropic, pick a model (or enter a custom model ID), save your API key, then select **Use Cloud model**. Keys are stored in the operating system credential store, separately from settings and library exports. You can replace or remove each provider's key. Saving a key does not verify provider access; authentication, billing, and model access are checked on generation. Only models supported by the provider's text-generation endpoint can be used.
 
-Every recording has a **Local / Cloud** processing picker. Cloud clearly names the provider and sends the transcript text, summary instructions, and language to that provider when you explicitly generate a summary; provider charges and data policies apply. Transcription still uses Local Whisper models, and audio is not sent to summary providers. There is no automatic fallback from Local to Cloud. Failed, refused, or truncated Cloud responses leave an existing summary unchanged. OpenAI requests use `store: false`; this does not override the provider's other retention policies.
+Every recording has a **Local / Cloud** processing picker. Cloud clearly names the provider and sends the transcript text, summary instructions, and language to that provider when you generate a summary manually or enable Auto summarize; provider charges and data policies apply. Transcription has its own Local / Cloud setting, and audio is not sent to summary providers. There is no automatic fallback from Local to Cloud. Failed, refused, or truncated Cloud responses leave an existing summary unchanged. OpenAI requests use `store: false`; this does not override the provider's other retention policies.
 
 Cloud integrations use the [OpenAI Responses API](https://developers.openai.com/api/reference/resources/responses/methods/create) and [Anthropic Messages API](https://platform.claude.com/docs/en/api/messages/create). The browser development preview simulates Cloud calls and key presence without retaining API keys or making provider requests; native builds perform the actual calls.
 
@@ -78,7 +94,9 @@ npm run tauri build -- --target universal-apple-darwin --bundles app
 ./scripts/build-macos-dmg.sh src-tauri/target/universal-apple-darwin/release/bundle/macos/Eavesdrop.app release/Eavesdrop_universal.dmg
 ```
 
-The DMG includes Eavesdrop and an Applications shortcut. Open the DMG, drag Eavesdrop onto Applications, then eject the disk image and launch Eavesdrop from Applications. Both signed and ad-hoc releases use the same DMG packaging script; signing and notarization of the release DMG happen after packaging.
+The DMG opens in icon view with Eavesdrop on the left, an Applications shortcut on the right, and a drag-to-install arrow and instructions between them. After copying, eject the disk image and launch Eavesdrop from Applications. Both signed and ad-hoc releases use the same DMG packaging script; signing and notarization of the release DMG happen after packaging.
+
+DMG packaging requires Python 3.9 or later and network access to install the pinned packages in `scripts/dmg-requirements.txt` into a temporary virtual environment. Finder layout is written directly, so packaging also works on CI without Finder automation. To regenerate the installation background, run `swift scripts/build-dmg-background.swift assets/dmg-background.tiff`; its layout coordinates are shared with `scripts/dmg-settings.py`.
 
 Updater artifacts require `TAURI_SIGNING_PRIVATE_KEY` or `TAURI_SIGNING_PRIVATE_KEY_PATH`. For a local app-only build that does not publish an update, use `npm run bundle:mac`; it disables updater artifact generation for that build and applies the stable pilot signature.
 
@@ -146,8 +164,8 @@ The `TAURI_SIGNING_PRIVATE_KEY` GitHub Actions secret is also required and has a
 - Each recording has its own AES-256-GCM key, wrapped by a master key held in macOS Keychain or Windows Credential Manager.
 - Audio assets and recovery fragments use independently authenticated blocks with fresh nonces.
 - Playback and export decrypt in memory; the app does not create durable plaintext working files.
-- Whisper transcription also processes audio in memory and never sends it over the network.
-- Deleted recordings remain recoverable for seven days and are then purged at startup.
+- Local Whisper transcription processes audio in memory and never sends it over the network. Optional cloud transcription sends audio to OpenAI when requested manually or through the opt-in Auto transcribe setting; its API key is shared with OpenAI summaries and kept in the system credential store.
+- Deleting one or more recordings requires confirmation and permanently removes their local audio, recovery files, transcripts, summaries, highlights, and delivery history. Previously recoverable items from Recently Deleted return to the library on upgrade so they can be explicitly deleted.
 
 ## Source layout
 

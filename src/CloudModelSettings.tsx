@@ -64,7 +64,7 @@ export function CloudModelSettings({ settings, keys, keyError, onSave, onKeysCha
           await api.removeCloudApiKey(provider); setApiKey(""); await onKeysChanged();
         })}>Remove key</button>}
       </div>
-      <p>{stored ? "API key saved in the system credential store. " : "No API key saved. "}Keys are kept out of settings and exports. Model access is checked when you generate a summary.</p>
+      <p>{stored ? "API key saved in the system credential store. " : "No API key saved. "}Keys are kept out of settings and exports. {provider === "openai" && "This key is also used for cloud transcription. "}Model access is checked when you generate a summary.</p>
     </div>
     {(error || keyError) && <p className="player-error" role="alert">{error || keyError}</p>}
     {keyError && <button className="button secondary" disabled={busy} onClick={() => void run(onKeysChanged)}>Retry key status</button>}

@@ -155,6 +155,26 @@ impl Repository {
             "summary_template",
             "TEXT NOT NULL DEFAULT 'discussion'",
         )?;
+        ensure_column(
+            &connection,
+            "settings",
+            "transcription_source",
+            "TEXT NOT NULL DEFAULT 'local'",
+        )?;
+        ensure_column(
+            &connection,
+            "settings",
+            "auto_transcribe",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        ensure_column(
+            &connection,
+            "settings",
+            "auto_summarize",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        ensure_column(&connection, "transcripts", "source", "TEXT")?;
+        ensure_column(&connection, "transcripts", "model", "TEXT")?;
         ensure_column(&connection, "summaries", "markdown", "TEXT")?;
         ensure_column(&connection, "summaries", "template_id", "TEXT")?;
         ensure_column(
@@ -162,6 +182,12 @@ impl Repository {
             "settings",
             "theme",
             "TEXT NOT NULL DEFAULT 'light'",
+        )?;
+        // The trash view no longer exists. Keep previously recoverable items
+        // accessible until the user confirms permanent deletion.
+        connection.execute(
+            "UPDATE recordings SET deleted_at=NULL WHERE deleted_at IS NOT NULL",
+            [],
         )?;
         Ok(())
     }
@@ -172,9 +198,11 @@ impl Repository {
             .lock()
             .map_err(|_| AppError::Storage("database lock poisoned".into()))?;
         connection.query_row(
-            "SELECT onboarding_completed, meeting_detection_enabled, launch_at_login, microphone_id, whisper_model_path, summary_model_path, summary_prompt, theme, summary_template, summary_source, cloud_provider, cloud_model FROM settings WHERE singleton = 1",
+            "SELECT onboarding_completed, meeting_detection_enabled, launch_at_login, microphone_id, whisper_model_path, summary_model_path, summary_prompt, theme, summary_template, summary_source, cloud_provider, cloud_model, transcription_source, auto_transcribe, auto_summarize FROM settings WHERE singleton = 1",
             [],
             |row| Ok(AppSettings {
+                auto_transcribe: row.get::<_, i64>(13)? != 0,
+                auto_summarize: row.get::<_, i64>(14)? != 0,
                 onboarding_completed: row.get::<_, i64>(0)? != 0,
                 meeting_detection_enabled: row.get::<_, i64>(1)? != 0,
                 launch_at_login: row.get::<_, i64>(2)? != 0,
@@ -186,6 +214,7 @@ impl Repository {
                 summary_source: if row.get::<_, String>(9)? == "cloud" { crate::cloud_summarization::SummarySource::Cloud } else { crate::cloud_summarization::SummarySource::Local },
                 cloud_provider: if row.get::<_, String>(10)? == "anthropic" { crate::cloud_summarization::CloudProvider::Anthropic } else { crate::cloud_summarization::CloudProvider::Openai },
                 cloud_model: row.get(11)?,
+                transcription_source: if row.get::<_, String>(12)? == "cloud" { crate::cloud_transcription::TranscriptionSource::Cloud } else { crate::cloud_transcription::TranscriptionSource::Local },
                 theme: ThemePreference::from_stored(&row.get::<_, String>(7)?),
             }),
         ).map_err(Into::into)
@@ -200,6 +229,11 @@ impl Repository {
             crate::cloud_summarization::validate_model(model)?;
         }
         let next = AppSettings {
+            auto_transcribe: patch.auto_transcribe.unwrap_or(current.auto_transcribe),
+            auto_summarize: patch.auto_summarize.unwrap_or(current.auto_summarize),
+            transcription_source: patch
+                .transcription_source
+                .unwrap_or(current.transcription_source),
             summary_source: patch.summary_source.unwrap_or(current.summary_source),
             cloud_provider: patch.cloud_provider.unwrap_or(current.cloud_provider),
             cloud_model: patch.cloud_model.clone().unwrap_or(current.cloud_model),
@@ -234,8 +268,8 @@ impl Repository {
             .lock()
             .map_err(|_| AppError::Storage("database lock poisoned".into()))?;
         connection.execute(
-            "UPDATE settings SET onboarding_completed = ?1, meeting_detection_enabled = ?2, launch_at_login = ?3, microphone_id = ?4, whisper_model_path = ?5, summary_model_path = ?6, summary_prompt = ?7, theme = ?8, summary_template = ?9, summary_source = ?10, cloud_provider = ?11, cloud_model = ?12 WHERE singleton = 1",
-            params![next.onboarding_completed, next.meeting_detection_enabled, next.launch_at_login, next.microphone_id, next.whisper_model_path, next.summary_model_path, next.summary_prompt, next.theme.as_str(), next.summary_template, next.summary_source.as_str(), next.cloud_provider.as_str(), next.cloud_model],
+            "UPDATE settings SET onboarding_completed = ?1, meeting_detection_enabled = ?2, launch_at_login = ?3, microphone_id = ?4, whisper_model_path = ?5, summary_model_path = ?6, summary_prompt = ?7, theme = ?8, summary_template = ?9, summary_source = ?10, cloud_provider = ?11, cloud_model = ?12, transcription_source = ?13, auto_transcribe = ?14, auto_summarize = ?15 WHERE singleton = 1",
+            params![next.onboarding_completed, next.meeting_detection_enabled, next.launch_at_login, next.microphone_id, next.whisper_model_path, next.summary_model_path, next.summary_prompt, next.theme.as_str(), next.summary_template, next.summary_source.as_str(), next.cloud_provider.as_str(), next.cloud_model, next.transcription_source.as_str(), next.auto_transcribe, next.auto_summarize],
         )?;
         Ok(next)
     }
@@ -318,19 +352,14 @@ impl Repository {
         Ok(())
     }
 
-    pub fn list_recordings(&self, deleted_only: bool) -> AppResult<Vec<Recording>> {
+    pub fn list_recordings(&self) -> AppResult<Vec<Recording>> {
         let connection = self
             .connection
             .lock()
             .map_err(|_| AppError::Storage("database lock poisoned".into()))?;
-        let predicate = if deleted_only {
-            "deleted_at IS NOT NULL"
-        } else {
-            "deleted_at IS NULL"
-        };
-        let mut statement = connection.prepare(&format!(
-            "SELECT id,title,mode,started_at,ended_at,duration_ms,playable_duration_ms,status,size_bytes,codec,detected_app,deleted_at FROM recordings WHERE {predicate} ORDER BY started_at DESC"
-        ))?;
+        let mut statement = connection.prepare(
+            "SELECT id,title,mode,started_at,ended_at,duration_ms,playable_duration_ms,status,size_bytes,codec,detected_app,deleted_at FROM recordings ORDER BY started_at DESC"
+        )?;
         let recordings = statement
             .query_map([], recording_from_row)?
             .collect::<Result<Vec<_>, _>>()?;
@@ -368,9 +397,9 @@ impl Repository {
             .map_err(|_| AppError::Storage("database lock poisoned".into()))?;
         let transaction = connection.transaction()?;
         transaction.execute(
-            "INSERT INTO transcripts(recording_id, text, language, created_at) VALUES(?1, ?2, ?3, ?4)
-             ON CONFLICT(recording_id) DO UPDATE SET text=excluded.text, language=excluded.language, created_at=excluded.created_at",
-            params![recording_id, transcript.text, transcript.language, transcript.created_at],
+            "INSERT INTO transcripts(recording_id, text, language, created_at, source, model) VALUES(?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(recording_id) DO UPDATE SET text=excluded.text, language=excluded.language, created_at=excluded.created_at, source=excluded.source, model=excluded.model",
+            params![recording_id, transcript.text, transcript.language, transcript.created_at, transcript.source.map(|source| source.as_str()), transcript.model],
         )?;
         transaction.execute(
             "DELETE FROM transcript_segments WHERE recording_id=?1",
@@ -470,11 +499,7 @@ impl Repository {
         self.recording(id)
     }
 
-    pub fn set_deleted(&self, id: &str, deleted: bool) -> AppResult<()> {
-        self.set_deleted_many(&[id.to_string()], deleted)
-    }
-
-    pub fn set_deleted_many(&self, ids: &[String], deleted: bool) -> AppResult<()> {
+    pub fn delete_recordings(&self, ids: &[String]) -> AppResult<()> {
         if ids.is_empty() {
             return Ok(());
         }
@@ -483,48 +508,44 @@ impl Repository {
             .lock()
             .map_err(|_| AppError::Storage("database lock poisoned".into()))?;
         let transaction = connection.transaction()?;
-        let value = deleted.then(|| Utc::now().to_rfc3339());
-        let updated_at = Utc::now().to_rfc3339();
+        let mut paths = Vec::new();
+        // Validate the entire selection before touching any files.
         for id in ids {
-            let changed = transaction.execute(
-                "UPDATE recordings SET deleted_at=?2, updated_at=?3 WHERE id=?1",
-                params![id, value, updated_at],
-            )?;
-            if changed == 0 {
-                return Err(AppError::NotFound);
+            let (asset, journal) = transaction
+                .query_row(
+                    "SELECT asset_path, journal_path FROM recordings WHERE id=?1",
+                    [id],
+                    |row| {
+                        Ok((
+                            row.get::<_, Option<String>>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                        ))
+                    },
+                )
+                .optional()?
+                .ok_or(AppError::NotFound)?;
+            paths.extend([asset, journal].into_iter().flatten());
+        }
+        // Keep metadata (and file paths) if cleanup fails so deletion can be
+        // retried. Missing files are fine, including after a partial attempt.
+        for path in paths {
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(AppError::Storage(format!(
+                        "could not delete recording file: {error}"
+                    )));
+                }
             }
+        }
+        for id in ids {
+            // Foreign keys cascade to transcripts, summaries, highlights,
+            // transcript segments, summary points, and delivery history.
+            transaction.execute("DELETE FROM recordings WHERE id=?1", [id])?;
         }
         transaction.commit()?;
         Ok(())
-    }
-
-    pub fn purge_expired(&self) -> AppResult<Vec<String>> {
-        let cutoff = (Utc::now() - chrono::Duration::days(7)).to_rfc3339();
-        let connection = self
-            .connection
-            .lock()
-            .map_err(|_| AppError::Storage("database lock poisoned".into()))?;
-        let mut statement = connection.prepare(
-            "SELECT asset_path, journal_path FROM recordings WHERE deleted_at IS NOT NULL AND deleted_at < ?1",
-        )?;
-        let paths = statement
-            .query_map([&cutoff], |row| {
-                Ok([
-                    row.get::<_, Option<String>>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                ])
-            })?
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .flatten()
-            .flatten()
-            .collect::<Vec<String>>();
-        drop(statement);
-        connection.execute(
-            "DELETE FROM recordings WHERE deleted_at IS NOT NULL AND deleted_at < ?1",
-            [&cutoff],
-        )?;
-        Ok(paths)
     }
 }
 
@@ -563,10 +584,20 @@ fn recording_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Recording> {
 fn transcript_for(connection: &Connection, recording_id: &str) -> AppResult<Option<Transcript>> {
     let transcript = connection
         .query_row(
-            "SELECT text,language,created_at FROM transcripts WHERE recording_id=?1",
+            "SELECT text,language,created_at,source,model FROM transcripts WHERE recording_id=?1",
             [recording_id],
             |row| {
                 Ok(Transcript {
+                    source: match row.get::<_, Option<String>>(3)?.as_deref() {
+                        Some("cloud") => {
+                            Some(crate::cloud_transcription::TranscriptionSource::Cloud)
+                        }
+                        Some("local") => {
+                            Some(crate::cloud_transcription::TranscriptionSource::Local)
+                        }
+                        _ => None,
+                    },
+                    model: row.get(4)?,
                     text: row.get(0)?,
                     language: row.get(1)?,
                     created_at: row.get(2)?,
@@ -689,6 +720,42 @@ mod tests {
             transcript: None,
             summary: None,
         }
+    }
+
+    #[test]
+    fn automatic_settings_migrate_off_and_persist_independently() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("library.sqlite3");
+        let repository = Repository::open(&path).unwrap();
+        repository.connection.lock().unwrap().execute_batch(
+            "ALTER TABLE settings DROP COLUMN auto_transcribe; ALTER TABLE settings DROP COLUMN auto_summarize;"
+        ).unwrap();
+        drop(repository);
+        let repository = Repository::open(&path).unwrap();
+        let settings = repository.settings().unwrap();
+        assert!(!settings.auto_transcribe && !settings.auto_summarize);
+        repository
+            .update_settings(&SettingsPatch {
+                auto_transcribe: Some(true),
+                ..Default::default()
+            })
+            .unwrap();
+        let settings = repository
+            .update_settings(&SettingsPatch {
+                auto_summarize: Some(true),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(settings.auto_transcribe && settings.auto_summarize);
+        repository
+            .update_settings(&SettingsPatch {
+                auto_transcribe: Some(false),
+                ..Default::default()
+            })
+            .unwrap();
+        drop(repository);
+        let settings = Repository::open(&path).unwrap().settings().unwrap();
+        assert!(!settings.auto_transcribe && settings.auto_summarize);
     }
 
     #[test]
@@ -826,55 +893,176 @@ mod tests {
     }
 
     #[test]
-    fn purge_expired_handles_recordings_that_never_finalized() {
+    fn legacy_trash_returns_to_the_library_on_upgrade() {
         let temp = tempfile::tempdir().unwrap();
-        let repository = Repository::open(&temp.path().join("library.sqlite3")).unwrap();
+        let path = temp.path().join("library.sqlite3");
+        let repository = Repository::open(&path).unwrap();
         repository
-            .insert_recording(&test_recording("unfinished"), "journal.bin", &[0; 32])
+            .insert_recording(&test_recording("legacy"), "journal", &[0; 32])
             .unwrap();
-        let expired = (Utc::now() - chrono::Duration::days(30)).to_rfc3339();
-        {
-            let connection = repository.connection.lock().unwrap();
-            connection
-                .execute(
-                    "UPDATE recordings SET deleted_at=?1 WHERE id='unfinished'",
-                    [&expired],
-                )
-                .unwrap();
-        }
+        repository
+            .connection
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE recordings SET deleted_at=?1 WHERE id='legacy'",
+                [Utc::now().to_rfc3339()],
+            )
+            .unwrap();
+        drop(repository);
+        let reopened = Repository::open(&path).unwrap();
+        assert_eq!(reopened.list_recordings().unwrap().len(), 1);
+        assert!(reopened.recording("legacy").unwrap().deleted_at.is_none());
+    }
 
-        // asset_path is still NULL because the recording never finalized.
-        let paths = repository.purge_expired().unwrap();
-        assert_eq!(paths, vec!["journal.bin".to_string()]);
-        assert!(repository.list_recordings(true).unwrap().is_empty());
+    fn insert_deletable_recording(
+        repository: &Repository,
+        root: &Path,
+        id: &str,
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
+        let asset = root.join(format!("{id}.eav"));
+        let journal = root.join(format!("{id}.journal"));
+        std::fs::write(&asset, b"encrypted audio").unwrap();
+        std::fs::write(&journal, b"recovery fragments").unwrap();
+        let mut recording = test_recording(id);
+        recording.status = "ready".into();
+        repository
+            .insert_recording(&recording, journal.to_str().unwrap(), &[0; 32])
+            .unwrap();
+        repository
+            .connection
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE recordings SET asset_path=?2 WHERE id=?1",
+                params![id, asset.to_str().unwrap()],
+            )
+            .unwrap();
+        (asset, journal)
     }
 
     #[test]
-    fn bulk_delete_and_restore_are_atomic() {
+    fn permanent_delete_removes_files_and_all_related_data() {
         let temp = tempfile::tempdir().unwrap();
         let repository = Repository::open(&temp.path().join("library.sqlite3")).unwrap();
-        for id in ["one", "two"] {
-            repository
-                .insert_recording(&test_recording(id), "journal", &[0; 32])
+        let (asset, journal) = insert_deletable_recording(&repository, temp.path(), "one");
+        let (other_asset, _) = insert_deletable_recording(&repository, temp.path(), "keep");
+        repository.add_highlight("one", 500).unwrap();
+        repository
+            .save_transcript(
+                "one",
+                &Transcript {
+                    source: None,
+                    model: None,
+                    text: "Transcript".into(),
+                    language: None,
+                    created_at: Utc::now().to_rfc3339(),
+                    segments: vec![TranscriptSegment {
+                        start_ms: 0,
+                        end_ms: 1000,
+                        text: "Transcript".into(),
+                    }],
+                },
+            )
+            .unwrap();
+        repository
+            .save_summary(
+                "one",
+                &Summary {
+                    suggested_title: "Summary".into(),
+                    overview: "Overview".into(),
+                    key_points: vec!["Point".into()],
+                    decisions: vec![],
+                    action_items: vec![],
+                    model: "local".into(),
+                    created_at: Utc::now().to_rfc3339(),
+                    markdown: None,
+                    template_id: None,
+                },
+            )
+            .unwrap();
+        repository.connection.lock().unwrap().execute(
+            "INSERT INTO delivery_attempts(id,recording_id,destination_id,status,created_at,updated_at) VALUES('delivery','one','oakos','succeeded','now','now')", [],
+        ).unwrap();
+        repository.delete_recordings(&["one".into()]).unwrap();
+        assert!(!asset.exists());
+        assert!(!journal.exists());
+        assert!(repository.recording("one").is_err());
+        assert_eq!(repository.list_recordings().unwrap().len(), 1);
+        assert!(other_asset.exists());
+        let connection = repository.connection.lock().unwrap();
+        for table in [
+            "highlights",
+            "transcripts",
+            "transcript_segments",
+            "summaries",
+            "summary_points",
+            "delivery_attempts",
+        ] {
+            let count: i64 = connection
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM {table} WHERE recording_id='one'"),
+                    [],
+                    |row| row.get(0),
+                )
                 .unwrap();
+            assert_eq!(count, 0, "{table} still contains deleted data");
         }
+    }
 
+    #[test]
+    fn bulk_delete_validates_all_ids_before_removing_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let repository = Repository::open(&temp.path().join("library.sqlite3")).unwrap();
+        let (asset, _) = insert_deletable_recording(&repository, temp.path(), "one");
+        let (second_asset, _) = insert_deletable_recording(&repository, temp.path(), "two");
+        assert!(matches!(
+            repository.delete_recordings(&["one".into(), "missing".into()]),
+            Err(AppError::NotFound)
+        ));
+        assert!(asset.exists());
+        assert_eq!(repository.list_recordings().unwrap().len(), 2);
         repository
-            .set_deleted_many(&["one".into(), "two".into()], true)
+            .delete_recordings(&["one".into(), "two".into()])
             .unwrap();
-        assert!(repository.list_recordings(false).unwrap().is_empty());
-        assert_eq!(repository.list_recordings(true).unwrap().len(), 2);
+        assert!(!asset.exists());
+        assert!(!second_asset.exists());
+        assert!(repository.list_recordings().unwrap().is_empty());
+    }
 
-        let error = repository
-            .set_deleted_many(&["one".into(), "missing".into()], false)
-            .unwrap_err();
-        assert!(matches!(error, AppError::NotFound));
-        assert_eq!(repository.list_recordings(true).unwrap().len(), 2);
-
+    #[test]
+    fn interrupted_recordings_without_an_audio_asset_can_be_deleted() {
+        let temp = tempfile::tempdir().unwrap();
+        let repository = Repository::open(&temp.path().join("library.sqlite3")).unwrap();
+        let journal = temp.path().join("interrupted.journal");
+        std::fs::write(&journal, b"recovery fragments").unwrap();
         repository
-            .set_deleted_many(&["one".into(), "two".into()], false)
+            .insert_recording(
+                &test_recording("interrupted"),
+                journal.to_str().unwrap(),
+                &[0; 32],
+            )
             .unwrap();
-        assert_eq!(repository.list_recordings(false).unwrap().len(), 2);
+        repository
+            .delete_recordings(&["interrupted".into()])
+            .unwrap();
+        assert!(!journal.exists());
+        assert!(repository.recording("interrupted").is_err());
+    }
+
+    #[test]
+    fn failed_file_cleanup_preserves_metadata_for_retry() {
+        let temp = tempfile::tempdir().unwrap();
+        let repository = Repository::open(&temp.path().join("library.sqlite3")).unwrap();
+        let (asset, journal) = insert_deletable_recording(&repository, temp.path(), "one");
+        std::fs::remove_file(&journal).unwrap();
+        std::fs::create_dir(&journal).unwrap();
+        assert!(repository.delete_recordings(&["one".into()]).is_err());
+        assert!(repository.recording("one").is_ok());
+        assert!(!asset.exists());
+        std::fs::remove_dir(&journal).unwrap();
+        repository.delete_recordings(&["one".into()]).unwrap();
+        assert!(repository.recording("one").is_err());
     }
 
     #[test]
@@ -915,6 +1103,74 @@ mod tests {
     }
 
     #[test]
+    fn cloud_transcription_migrates_as_local_and_preserves_text_only_provenance() {
+        use crate::cloud_transcription::TranscriptionSource;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("library.sqlite3");
+        let repository = Repository::open(&path).unwrap();
+        repository
+            .insert_recording(&test_recording("one"), "journal", &[0; 32])
+            .unwrap();
+        repository
+            .save_transcript(
+                "one",
+                &Transcript {
+                    text: "Legacy transcript".into(),
+                    language: None,
+                    created_at: "now".into(),
+                    segments: vec![],
+                    source: None,
+                    model: None,
+                },
+            )
+            .unwrap();
+        repository.connection.lock().unwrap().execute_batch(
+            "ALTER TABLE settings DROP COLUMN transcription_source; ALTER TABLE transcripts DROP COLUMN source; ALTER TABLE transcripts DROP COLUMN model;"
+        ).unwrap();
+        drop(repository);
+        let repository = Repository::open(&path).unwrap();
+        assert_eq!(
+            repository.settings().unwrap().transcription_source,
+            TranscriptionSource::Local
+        );
+        assert_eq!(
+            repository
+                .recording("one")
+                .unwrap()
+                .transcript
+                .unwrap()
+                .text,
+            "Legacy transcript"
+        );
+        let cloud = Transcript {
+            text: "Cloud transcript".into(),
+            language: Some("da".into()),
+            created_at: "now".into(),
+            segments: vec![],
+            source: Some(TranscriptionSource::Cloud),
+            model: Some("gpt-transcribe".into()),
+        };
+        repository.save_transcript("one", &cloud).unwrap();
+        repository
+            .update_settings(&SettingsPatch {
+                transcription_source: Some(TranscriptionSource::Cloud),
+                ..Default::default()
+            })
+            .unwrap();
+        drop(repository);
+        let repository = Repository::open(&path).unwrap();
+        assert_eq!(repository.recording("one").unwrap().transcript, Some(cloud));
+        assert_eq!(
+            repository.settings().unwrap().transcription_source,
+            TranscriptionSource::Cloud
+        );
+        assert_eq!(
+            repository.settings().unwrap().summary_source,
+            crate::cloud_summarization::SummarySource::Local
+        );
+    }
+
+    #[test]
     fn timestamped_transcripts_round_trip() {
         let temp = tempfile::tempdir().unwrap();
         let repository = Repository::open(&temp.path().join("library.sqlite3")).unwrap();
@@ -922,6 +1178,8 @@ mod tests {
             .insert_recording(&test_recording("one"), "journal", &[0; 32])
             .unwrap();
         let transcript = Transcript {
+            source: None,
+            model: None,
             text: "Hello there.".into(),
             language: Some("English".into()),
             created_at: Utc::now().to_rfc3339(),

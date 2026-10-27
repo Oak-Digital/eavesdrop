@@ -8,6 +8,7 @@
     "core:window:allow-start-dragging",
     "dialog:allow-save",
     "dialog:allow-open",
+    "dialog:allow-message",
     "autostart:allow-enable",
     "autostart:allow-disable",
     "autostart:allow-is-enabled",

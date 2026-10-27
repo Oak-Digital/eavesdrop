@@ -26,7 +26,6 @@ const recording: Recording = {
 };
 
 const baseProps = {
-  deleted: false,
   whisperModelPath: null,
   summaryModelPath: null,
   activity: null,
@@ -144,9 +143,10 @@ describe("RecordingDetail OakOS publishing", () => {
     const publish = vi.spyOn(api, "publishRecordingToOakOs").mockResolvedValue({ location: "/api/v1/recordings/remote" });
     render(<RecordingDetail recording={recording} {...baseProps} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Publish to OakOS" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Publish to OakOS" }));
     const projectSelect = await screen.findByLabelText("Project");
-    expect(projectSelect.textContent).toBe("Choose a project…");
+    expect((projectSelect as HTMLInputElement).value).toBe("");
+    expect(projectSelect.getAttribute("placeholder")).toBe("Search projects or clients…");
     expect((screen.getByRole("button", { name: "Publish" }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.keyDown(projectSelect, { key: "Enter" });
     fireEvent.click(await screen.findByRole("option", { name: "Product" }));
@@ -156,14 +156,21 @@ describe("RecordingDetail OakOS publishing", () => {
     expect((await screen.findByRole("status")).textContent).toContain("Sent to Product");
   });
 
-  it("opens integration setup when OakOS is not connected", async () => {
-    vi.spyOn(api, "getOakOsIntegration").mockResolvedValue({ connected: false });
-    const onOpenIntegrations = vi.fn();
-    render(<RecordingDetail recording={recording} {...baseProps} onOpenIntegrations={onOpenIntegrations} />);
+  it("hides publishing when OakOS is not connected", async () => {
+    const getIntegration = vi.spyOn(api, "getOakOsIntegration").mockResolvedValue({ connected: false });
+    render(<RecordingDetail recording={recording} {...baseProps} />);
+    await waitFor(() => expect(getIntegration).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "Publish to OakOS" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Export M4A" })).toBeTruthy();
+  });
 
-    fireEvent.click(screen.getByRole("button", { name: "Publish to OakOS" }));
-
-    await waitFor(() => expect(onOpenIntegrations).toHaveBeenCalledOnce());
+  it("keeps publishing hidden while checking the connection and if the check fails", async () => {
+    let rejectConnection!: (reason: Error) => void;
+    vi.spyOn(api, "getOakOsIntegration").mockReturnValue(new Promise((_, reject) => { rejectConnection = reject; }));
+    render(<RecordingDetail recording={recording} {...baseProps} />);
+    expect(screen.queryByRole("button", { name: "Publish to OakOS" })).toBeNull();
+    rejectConnection(new Error("Credential store unavailable"));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Publish to OakOS" })).toBeNull());
   });
 });
 

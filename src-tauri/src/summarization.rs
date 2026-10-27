@@ -351,6 +351,8 @@ mod tests {
 
         // The request side is what the engine parses.
         let transcript = Transcript {
+            source: None,
+            model: None,
             text: "hello".into(),
             language: Some("english".into()),
             created_at: "now".into(),

@@ -69,6 +69,12 @@ The hero is a custom isometric tape recorder built with the [Hairline creation s
 
 Use `npm run preview` after building to check the animation in the page. Verify continuous motion with the pointer inside and outside the drawing, pause/resume, reduced motion, and offscreen suspension. The upstream pointer-answer visual harness assumes an interactive figure and does not apply to this ambient variant.
 
+### Privacy vault
+
+The privacy section uses a closed personal safe with a gently turning dial and a handle that settles inward. Hovering near the dial controls its rotation; the door stays shut. The illustration runs automatically on desktop and mobile, has no playback control, and stays still under reduced motion.
+
+Edit `scripts/hairline/vault.js` for geometry and movement, and `src/PrivacyVault.tsx` for lifecycle and playback. `npm run hero:build` validates the vault with every upstream check enabled and generates its ESM adapter. It imports the recorder's existing kernel so both figures use one shared animation loop. The standalone bench defaults to an interactive rest pose; the React component enables ambient playback. The tour moves left, right, and back to the dial's center before leaving. The dial's intentionally small movement keeps the closed safe visually calm beside the privacy copy.
+
 ### Page files
 
 - `src/App.tsx`: presentation, privacy, download lookup, and FAQs.
@@ -77,4 +83,4 @@ Use `npm run preview` after building to check the animation in the page. Verify 
 - `index.html`: title, search/social descriptions, favicon, and a no-JavaScript download fallback.
 - `ascii-reveal` supplies `AsciiSkeleton` during the real release request and lazy preview load, and `AsciiReveal` when content arrives. There are no artificial loading delays. The package and site respect reduced-motion preferences.
 
-The loading treatments are inspired by [ascii-reveal](https://quanhoangindex.github.io/ascii-reveal/); the recorder is custom Hairline geometry, and the privacy illustration is native text. Product claims are based on the app source and repository documentation, including the distinction between local processing and optional cloud summaries.
+The loading treatments are inspired by [ascii-reveal](https://quanhoangindex.github.io/ascii-reveal/); the recorder and privacy vault are custom Hairline geometry. Product claims are based on the app source and repository documentation, including the distinction between local processing and optional cloud summaries.

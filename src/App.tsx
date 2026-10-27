@@ -18,7 +18,7 @@ import {
   StopIcon,
   TrashIcon,
 } from "./icons";
-import type { CloudKeyStatus, CloudProvider, SummarySource, AppSnapshot, CaptureMode, ModelDownloadStatus, OakOsProject, Recording, SummarizationStage, SummaryModelInfo, TranscriptionStage, WhisperModelInfo } from "./types";
+import type { AutomaticProcessingStatus, CloudKeyStatus, CloudProvider, SummarySource, TranscriptionSource, AppSnapshot, CaptureMode, ModelDownloadStatus, OakOsProject, Recording, SummarizationStage, SummaryModelInfo, TranscriptionStage, WhisperModelInfo } from "./types";
 import { libraryRecordingAction } from "./recordingAction";
 import { LiveRecording } from "./LiveRecording";
 import { applyTheme } from "./theme";
@@ -30,9 +30,15 @@ import Markdown from "react-markdown";
 import { DEFAULT_SUMMARY_TEMPLATE, SUMMARY_TEMPLATE_OPTIONS, summaryTemplate } from "./summaryTemplates";
 import { SummaryTemplateSettings } from "./SummaryTemplateSettings";
 import { CloudModelSettings } from "./CloudModelSettings";
-import { SUMMARY_SOURCE_OPTIONS, providerName } from "./cloudModels";
+import { CloudTranscriptionSettings } from "./CloudTranscriptionSettings";
+import { SUMMARY_SOURCE_OPTIONS, TRANSCRIPTION_SOURCE_OPTIONS, CLOUD_TRANSCRIPTION_MODEL, providerName } from "./cloudModels";
+import { IntegrationCard } from "./IntegrationCard";
+import { SelectionCheckbox } from "./SelectionCheckbox";
+import { OakOsProjectPicker } from "./OakOsProjectPicker";
 
-type LibraryPage = "recordings" | "deleted" | "integrations" | "settings";
+const oakLogo = new URL("../assets/oak-logo.svg", import.meta.url).href;
+
+type LibraryPage = "recordings" | "integrations" | "settings";
 const isMac = /Macintosh|Mac OS X/.test(navigator.userAgent);
 
 function beginWindowDrag(event: React.MouseEvent<HTMLElement>) {
@@ -225,10 +231,10 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
   const [selected, setSelected] = useState<Recording | null>(null);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
-  const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
+  const [automaticError, setAutomaticError] = useState<string | null>(null);
   const [startingFromLibrary, setStartingFromLibrary] = useState(false);
   const [activity, setActivity] = useState<ActivityState | null>(null);
   const activityRef = useRef<ActivityState | null>(null);
@@ -236,8 +242,9 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
 
   const reload = async () => {
     setLoading(true);
-    const items = await api.listRecordings(page === "deleted");
+    const items = await api.listRecordings();
     setRecordings(items);
+    setSelectedIds((current) => new Set([...current].filter((id) => items.some((item) => item.id === id))));
     setLoading(false);
   };
 
@@ -245,7 +252,6 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
 
   useEffect(() => {
     pageRef.current = page;
-    setSelectionMode(false);
     setSelectedIds(new Set());
     setBulkError(null);
   }, [page]);
@@ -263,6 +269,35 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
       setSelected((current) => current?.id === recording.id ? recording : current);
       setLoading(false);
     }).then(keep);
+
+    void api.onRecordingUpdated((recording) => {
+      if (disposed) return;
+      setRecordings((items) => [recording, ...items.filter((item) => item.id !== recording.id)].sort((a, b) => b.startedAt.localeCompare(a.startedAt)));
+      setSelected((current) => current?.id === recording.id ? recording : current);
+    }).then(keep);
+
+    let receivedAutomaticEvent = false;
+    const automaticStatus = (status: AutomaticProcessingStatus) => {
+      if (disposed) return;
+      if (status.active) {
+        const next: ActivityState = { kind: status.kind, recordingId: status.recordingId, title: status.title,
+          label: status.kind === "transcription" ? "Auto transcribing" : "Auto summarizing", progress: 0 };
+        activityRef.current = next;
+        setActivity(next);
+      } else {
+        const current = activityRef.current;
+        if (current?.recordingId === status.recordingId && current.kind === status.kind) {
+          activityRef.current = null;
+          setActivity(null);
+        }
+        if (status.error) setAutomaticError(`Auto ${status.kind === "transcription" ? "transcription" : "summary"} failed for “${status.title}”: ${status.error}. You can retry from the recording.`);
+      }
+    };
+    void api.onAutomaticProcessing((status) => { receivedAutomaticEvent = true; automaticStatus(status); }).then(async (unlisten) => {
+      keep(unlisten);
+      const status = await api.getAutomaticProcessingStatus();
+      if (status && !receivedAutomaticEvent) automaticStatus(status);
+    }).catch((cause) => { if (!disposed) setAutomaticError(String(cause)); });
 
     // Ignore stragglers for a run the detail view already finished or cancelled.
     const advance = (kind: ActivityKind, recordingId: string, label: string, progress: number) =>
@@ -282,7 +317,7 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
     }).then(keep);
 
     void api.onOpenRecording(async (recordingId) => {
-      const items = await api.listRecordings(false);
+      const items = await api.listRecordings();
       if (disposed) return;
       pageRef.current = "recordings";
       setPage("recordings");
@@ -303,6 +338,7 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
   }, [query, recordings]);
 
   const toggleSelection = (recordingId: string) => {
+    if (bulkBusy) return;
     setSelectedIds((current) => {
       const next = new Set(current);
       if (next.has(recordingId)) next.delete(recordingId); else next.add(recordingId);
@@ -310,8 +346,10 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
     });
   };
 
-  const allVisibleSelected = visible.length > 0 && visible.every((recording) => selectedIds.has(recording.id));
+  const visibleSelectionCount = visible.filter((recording) => selectedIds.has(recording.id)).length;
+  const allVisibleSelected = visible.length > 0 && visibleSelectionCount === visible.length;
   const toggleAllVisible = () => {
+    if (bulkBusy) return;
     setSelectedIds((current) => {
       const next = new Set(current);
       visible.forEach((recording) => {
@@ -321,22 +359,21 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
     });
   };
 
-  const exitSelection = () => {
-    setSelectionMode(false);
+  const clearSelection = () => {
     setSelectedIds(new Set());
     setBulkError(null);
   };
 
   const applyBulkAction = async () => {
     const ids = [...selectedIds];
-    if (!ids.length) return;
-    if (page === "recordings" && !window.confirm(`Move ${ids.length} ${ids.length === 1 ? "recording" : "recordings"} to Recently Deleted?`)) return;
+    if (!ids.length || bulkBusy) return;
     setBulkBusy(true);
     setBulkError(null);
     try {
-      if (page === "deleted") await api.restoreRecordings(ids); else await api.deleteRecordings(ids);
+      if (!await api.confirmRecordingDeletion(recordings.filter((item) => selectedIds.has(item.id)))) return;
+      await api.deleteRecordings(ids);
       await reload();
-      exitSelection();
+      clearSelection();
     } catch (cause) {
       setBulkError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -391,7 +428,6 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
         <div className="sidebar-brand" onMouseDown={beginWindowDrag}><BrandMark active={app.snapshot.session.phase === "recording"} /> Eavesdrop</div>
         <nav aria-label="Library">
           <button className={page === "recordings" ? "active" : ""} onClick={() => { setPage("recordings"); setSelected(null); }}><RecordingsIcon /> Recordings</button>
-          <button className={page === "deleted" ? "active" : ""} onClick={() => { setPage("deleted"); setSelected(null); }}><TrashIcon /> Recently deleted</button>
           <button className={page === "integrations" ? "active" : ""} onClick={() => { setPage("integrations"); setSelected(null); }}><IntegrationsIcon /> Integrations</button>
         </nav>
         <div className="sidebar-bottom">
@@ -406,14 +442,17 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
         <UpdateBanner app={app} updater={updater} />
         {app.error && <InlineError message={app.error} onClose={app.clearError} />}
         {bulkError && <InlineError message={bulkError} onClose={() => setBulkError(null)} />}
+        {automaticError && <InlineError message={automaticError} onClose={() => setAutomaticError(null)} />}
         {selected ? (
           <RecordingDetail
             recording={selected}
-            deleted={page === "deleted"}
             whisperModelPath={app.snapshot.settings.whisperModelPath}
             summaryModelPath={app.snapshot.settings.summaryModelPath}
             defaultSummaryTemplate={app.snapshot.settings.summaryTemplate}
             defaultSummarySource={app.snapshot.settings.summarySource}
+            defaultTranscriptionSource={app.snapshot.settings.transcriptionSource}
+            transcriptionKeyStored={models.cloudKeys.some((key) => key.provider === "openai" && key.keyStored)}
+            onOpenTranscriptionSettings={() => { setSelected(null); setSettingsTab("transcription"); setPage("settings"); }}
             cloudProvider={app.snapshot.settings.cloudProvider}
             cloudModel={app.snapshot.settings.cloudModel}
             cloudKeyStored={models.cloudKeys.some((key) => key.provider === app.snapshot?.settings.cloudProvider && key.keyStored)}
@@ -422,7 +461,7 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
             activity={activity}
             onChooseWhisperModel={async () => {
               const path = await api.selectWhisperModel();
-              if (path) await app.updateSettings({ whisperModelPath: path });
+              if (path) await app.updateSettings({ whisperModelPath: path, transcriptionSource: "local" });
             }}
             onChooseSummaryModel={async () => {
               const path = await api.selectSummaryModel();
@@ -444,18 +483,17 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
         ) : (
           <>
             <header className="content-header">
-              <div><h1>{page === "deleted" ? "Recently deleted" : "Recordings"}</h1><p>{page === "deleted" ? "Items are removed permanently after seven days." : "Your local meeting library."}</p></div>
+              <div><h1>Recordings</h1><p>Your local meeting library.</p></div>
               <div className="header-actions">
-                {selectionMode ? (
+                {selectedIds.size > 0 ? (
                   <>
-                    <button className="button secondary" disabled={bulkBusy} onClick={exitSelection}>Cancel</button>
-                    <button className={page === "deleted" ? "button primary" : "button danger"} disabled={bulkBusy || selectedIds.size === 0} onClick={applyBulkAction}>
-                      {page === "deleted" ? `Restore ${selectedIds.size || ""}` : <><TrashIcon /> Move {selectedIds.size || ""} to Deleted</>}
+                    <button className="button secondary" disabled={bulkBusy} onClick={clearSelection}>Clear selection</button>
+                    <button className="button danger" disabled={bulkBusy || selectedIds.size === 0 || (activity !== null && selectedIds.has(activity.recordingId))} onClick={applyBulkAction}>
+                      <TrashIcon /> {bulkBusy ? "Deleting…" : `Delete ${selectedIds.size || ""}`}
                     </button>
                   </>
                 ) : (
                   <>
-                    {recordings.length > 0 && <button className="button secondary" onClick={() => { setSelected(null); setSelectionMode(true); }}>Select</button>}
                     {page === "recordings" && (
                       <button className="button primary" disabled={recordingAction.kind === "pending"} onClick={handleRecordingAction}>
                         {(recordingAction.kind === "start" || app.snapshot.session.phase === "recording") && <span className="button-record-dot" />}
@@ -479,13 +517,15 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
               />
             )}
             <div className="list-toolbar">
+              <SelectionCheckbox label="Select all visible recordings" checked={allVisibleSelected}
+                indeterminate={visibleSelectionCount > 0 && !allVisibleSelected} disabled={bulkBusy || loading || visible.length === 0}
+                onChange={toggleAllVisible} />
               <label className="search-field"><SearchIcon /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search recordings" /></label>
               <div className="toolbar-summary">
-                {selectionMode && visible.length > 0 && <button className="toolbar-select" onClick={toggleAllVisible}>{allVisibleSelected ? "Deselect visible" : "Select all visible"}</button>}
-                <span>{selectionMode ? `${selectedIds.size} selected` : `${visible.length} ${visible.length === 1 ? "recording" : "recordings"}`}</span>
+                <span>{selectedIds.size > 0 ? `${selectedIds.size} selected` : `${visible.length} ${visible.length === 1 ? "recording" : "recordings"}`}</span>
               </div>
             </div>
-            <RecordingList items={visible} loading={loading} deleted={page === "deleted"} selectionMode={selectionMode} selectedIds={selectedIds} onSelect={setSelected} onToggleSelection={toggleSelection} />
+            <RecordingList items={visible} loading={loading} disabled={bulkBusy} selectedIds={selectedIds} onSelect={setSelected} onToggleSelection={toggleSelection} />
           </>
         )}
       </section>
@@ -493,7 +533,7 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
   );
 }
 
-// One long-running local job — a transcript or a summary — shown in the sidebar.
+// One long-running job — a transcript or a summary — shown in the sidebar.
 export type ActivityKind = "transcription" | "summary";
 export type ActivityState = { kind: ActivityKind; recordingId: string; title: string; label: string; progress: number };
 
@@ -605,7 +645,7 @@ function ModelDownloadProgressCard({ models }: { models: ModelManager }) {
 }
 
 function transcriptionLabel(stage: TranscriptionStage) {
-  return stage === "decoding" ? "Preparing audio" : "Transcribing";
+  return stage === "decoding" ? "Preparing audio" : stage === "cloudTranscribing" ? "Transcribing with OpenAI" : "Transcribing";
 }
 
 function summarizationLabel(stage: SummarizationStage) {
@@ -637,30 +677,34 @@ function ActivityProgressCard({ activity }: { activity: ActivityState }) {
   );
 }
 
-function RecordingList({ items, loading, deleted, selectionMode, selectedIds, onSelect, onToggleSelection }: { items: Recording[]; loading: boolean; deleted: boolean; selectionMode: boolean; selectedIds: Set<string>; onSelect: (item: Recording) => void; onToggleSelection: (id: string) => void }) {
+function RecordingList({ items, loading, disabled, selectedIds, onSelect, onToggleSelection }: { items: Recording[]; loading: boolean; disabled: boolean; selectedIds: Set<string>; onSelect: (item: Recording) => void; onToggleSelection: (id: string) => void }) {
   if (loading) return <div className="empty-state">Loading recordings…</div>;
-  if (items.length === 0) return <div className="empty-state"><AsciiWave /><strong>{deleted ? "Nothing recently deleted" : "No recordings yet"}</strong><p>{deleted ? "Deleted recordings will appear here for seven days." : "Start from the menu bar or the button above."}</p></div>;
+  if (items.length === 0) return <div className="empty-state"><AsciiWave /><strong>No recordings yet</strong><p>Start from the menu bar or the button above.</p></div>;
   return (
     <div className="recording-list">
-      {items.map((item) => {
-        const selected = selectedIds.has(item.id);
-        return (
-        <button className={selected ? "recording-row selected" : "recording-row"} key={item.id} aria-pressed={selectionMode ? selected : undefined} onClick={() => selectionMode ? onToggleSelection(item.id) : onSelect(item)}>
-          {selectionMode ? <span className="selection-box" aria-hidden="true">{selected ? "✓" : ""}</span> : <span className="play-circle"><PlayIcon /></span>}
-          <span className="recording-main"><strong>{item.title}</strong><em>{formatDate(item.startedAt)} · {item.mode === "online" ? "Online" : "In-person"}</em></span>
-          <time>{formatDuration(item.playableDurationMs)}</time>
-          <span className="recording-size">{formatSize(item.sizeBytes)}</span>
-          {!selectionMode && <MoreIcon />}
-        </button>
-      )})}
+      {items.map((item) => (
+        <div className={selectedIds.has(item.id) ? "recording-row selected" : "recording-row"} key={item.id}>
+          <SelectionCheckbox label={`Select ${item.title}`} checked={selectedIds.has(item.id)} disabled={disabled} onChange={() => onToggleSelection(item.id)} />
+          <button className="recording-open" disabled={disabled} onClick={() => onSelect(item)}>
+            <span className="recording-main"><strong>{item.title}</strong><em>{formatDate(item.startedAt)} · {item.mode === "online" ? "Online" : "In-person"}</em></span>
+            <time>{formatDuration(item.playableDurationMs)}</time>
+            <span className="recording-size">{formatSize(item.sizeBytes)}</span>
+            <MoreIcon />
+          </button>
+        </div>
+      ))}
     </div>
   );
 }
 
-export function RecordingDetail({ recording, deleted, whisperModelPath, summaryModelPath, defaultSummaryTemplate = DEFAULT_SUMMARY_TEMPLATE, defaultSummarySource = "local", cloudProvider = "openai", cloudModel = "gpt-5.4-mini", cloudKeyStored = false, onOpenSummarySettings, activity, onChooseWhisperModel, onChooseSummaryModel, onOpenIntegrations, onBack, onJobStart, onJobEnd, onChanged, onRemoved }: { recording: Recording; deleted: boolean; whisperModelPath: string | null; summaryModelPath: string | null; defaultSummaryTemplate?: string; defaultSummarySource?: SummarySource; cloudProvider?: CloudProvider; cloudModel?: string; cloudKeyStored?: boolean; onOpenSummarySettings?: () => void; activity: ActivityState | null; onChooseWhisperModel: () => Promise<void>; onChooseSummaryModel: () => Promise<void>; onOpenIntegrations?: () => void; onBack: () => void; onJobStart: (item: Recording, kind: ActivityKind, label: string) => boolean; onJobEnd: (id: string, kind: ActivityKind) => void; onChanged: (item: Recording) => void; onRemoved: () => void }) {
+export function RecordingDetail({ recording, whisperModelPath, summaryModelPath, defaultSummaryTemplate = DEFAULT_SUMMARY_TEMPLATE, defaultSummarySource = "local", defaultTranscriptionSource = "local", transcriptionKeyStored = false, onOpenTranscriptionSettings, cloudProvider = "openai", cloudModel = "gpt-5.4-mini", cloudKeyStored = false, onOpenSummarySettings, activity, onChooseWhisperModel, onChooseSummaryModel, onOpenIntegrations, onBack, onJobStart, onJobEnd, onChanged, onRemoved }: { recording: Recording; whisperModelPath: string | null; summaryModelPath: string | null; defaultSummaryTemplate?: string; defaultSummarySource?: SummarySource; defaultTranscriptionSource?: TranscriptionSource; transcriptionKeyStored?: boolean; onOpenTranscriptionSettings?: () => void; cloudProvider?: CloudProvider; cloudModel?: string; cloudKeyStored?: boolean; onOpenSummarySettings?: () => void; activity: ActivityState | null; onChooseWhisperModel: () => Promise<void>; onChooseSummaryModel: () => Promise<void>; onOpenIntegrations?: () => void; onBack: () => void; onJobStart: (item: Recording, kind: ActivityKind, label: string) => boolean; onJobEnd: (id: string, kind: ActivityKind) => void; onChanged: (item: Recording) => void; onRemoved: () => void }) {
   const [title, setTitle] = useState(recording.title);
   const [busy, setBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [titleError, setTitleError] = useState<string | null>(null);
+  const [transcriptionSource, setTranscriptionSource] = useState<TranscriptionSource>(defaultTranscriptionSource);
+  useEffect(() => { setTranscriptionSource(defaultTranscriptionSource); }, [recording.id, defaultTranscriptionSource]);
+  const transcriptionReady = transcriptionSource === "cloud" ? transcriptionKeyStored : !!whisperModelPath;
   const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [summarySource, setSummarySource] = useState<SummarySource>(defaultSummarySource);
@@ -671,6 +715,17 @@ export function RecordingDetail({ recording, deleted, whisperModelPath, summaryM
     setSelectedTemplate(recording.summary?.templateId ?? defaultSummaryTemplate);
     setSummaryError(null);
   }, [recording.id, recording.summary?.templateId, defaultSummaryTemplate]);
+  const [oakOsConnected, setOakOsConnected] = useState(false);
+  useEffect(() => {
+    let disposed = false;
+    setOakOsConnected(false);
+    void api.getOakOsIntegration().then((integration) => {
+      if (!disposed) setOakOsConnected(integration.connected);
+    }).catch(() => {
+      if (!disposed) setOakOsConnected(false);
+    });
+    return () => { disposed = true; };
+  }, [recording.id]);
   const [loadingPublishProjects, setLoadingPublishProjects] = useState(false);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [publishProjects, setPublishProjects] = useState<OakOsProject[]>([]);
@@ -718,6 +773,7 @@ export function RecordingDetail({ recording, deleted, whisperModelPath, summaryM
     try {
       const integration = await api.getOakOsIntegration();
       if (!integration.connected) {
+        setOakOsConnected(false);
         onOpenIntegrations?.();
         return;
       }
@@ -769,11 +825,10 @@ export function RecordingDetail({ recording, deleted, whisperModelPath, summaryM
           <span>{formatDate(recording.startedAt)} · {formatDuration(recording.playableDurationMs)} · {formatSize(recording.sizeBytes)}</span>
           {titleError && <span className="title-error" id="recording-title-error" role="alert">{titleError}</span>}
         </div>
-        {!deleted && <div className="detail-actions">
-          <button className="button secondary" disabled={publishing || loadingPublishProjects} onClick={() => void choosePublishProject()}>{loadingPublishProjects ? "Loading projects…" : "Publish to OakOS"}</button>
+        <div className="detail-actions">
+          {oakOsConnected && <button className="button secondary" disabled={publishing || loadingPublishProjects} onClick={() => void choosePublishProject()}>{loadingPublishProjects ? "Loading projects…" : "Publish to OakOS"}</button>}
           <button className="button primary" disabled={publishing || loadingPublishProjects} onClick={() => api.exportRecording(recording)}><ExportIcon /> Export M4A</button>
-        </div>}
-        {deleted && <button className="button primary" onClick={async () => { await api.restoreRecording(recording.id); onRemoved(); }}>Restore</button>}
+        </div>
       </header>
 
       {publishMessage && <div className={publishMessage.kind === "error" ? "publish-notice error" : "publish-notice"} role={publishMessage.kind === "error" ? "alert" : "status"}>{publishMessage.text}</div>}
@@ -786,9 +841,8 @@ export function RecordingDetail({ recording, deleted, whisperModelPath, summaryM
           </div>
           <div className="field-label">
             <label htmlFor="publish-project">Project</label>
-            <Select id="publish-project" label="Project" autoFocus value={publishProjectId} disabled={publishing}
-              placeholder="Choose a project…" options={publishProjects.map((project) => ({ value: project.id, label: project.name }))}
-              onValueChange={(value) => { setPublishProjectId(value); setPublishDialogError(null); }} />
+            <OakOsProjectPicker id="publish-project" autoFocus value={publishProjectId} disabled={publishing}
+              projects={publishProjects} onValueChange={(value) => { setPublishProjectId(value); setPublishDialogError(null); }} />
           </div>
           {publishDialogError && <p className="integration-error" role="alert">{publishDialogError}</p>}
           <div className="publish-dialog-actions">
@@ -803,7 +857,7 @@ export function RecordingDetail({ recording, deleted, whisperModelPath, summaryM
       <section className="detail-section summary-section">
         <div className="section-heading">
           <div><h2>Summary</h2>{recording.summary && <span>{[summaryTemplate(recording.summary.templateId ?? "")?.name, recording.summary.model.startsWith("Cloud · ") ? recording.summary.model : `Local · ${recording.summary.model}`].filter(Boolean).join(" · ")}</span>}</div>
-          {!deleted && (summaryReady ? (
+          {summaryReady ? (
             <button className="button secondary compact-button" disabled={processing || !recording.transcript} onClick={async () => {
               if (!onJobStart(recording, "summary", summarySource === "cloud" ? `Contacting ${providerName(cloudProvider)}` : "Loading summary model")) return;
               setSummaryError(null);
@@ -817,9 +871,9 @@ export function RecordingDetail({ recording, deleted, whisperModelPath, summaryM
                 onJobEnd(recording.id, "summary");
               }
             }}>{summarizing ? "Summarizing…" : summarySource === "cloud" ? (recording.summary ? "Summarize again with Cloud" : "Summarize with Cloud") : recording.summary ? "Summarize again" : "Summarize"}</button>
-          ) : <button className="button secondary compact-button" onClick={summarySource === "cloud" ? onOpenSummarySettings : onChooseSummaryModel}>{summarySource === "cloud" ? "Set up Cloud" : "Choose summary model"}</button>)}
+          ) : <button className="button secondary compact-button" onClick={summarySource === "cloud" ? onOpenSummarySettings : onChooseSummaryModel}>{summarySource === "cloud" ? "Set up Cloud" : "Choose summary model"}</button>}
         </div>
-        {!deleted && <>
+        <>
           <div className="summary-template-picker">
             <label htmlFor="recording-summary-source">Processing</label>
             <Select id="recording-summary-source" label="Summary processing" value={summarySource} options={SUMMARY_SOURCE_OPTIONS}
@@ -828,12 +882,12 @@ export function RecordingDetail({ recording, deleted, whisperModelPath, summaryM
           <p className="summary-processing-note">{summarySource === "cloud"
             ? `Cloud · ${providerName(cloudProvider)} / ${cloudModel}. The transcript will be sent to ${providerName(cloudProvider)} when you summarize. Audio stays local. Provider charges may apply.`
             : `Local · ${summaryModelPath ? modelFileName(summaryModelPath) + ". " : ""}The transcript is processed on this computer.`}</p>
-        </>}
-        {!deleted && <div className="summary-template-picker">
+        </>
+        <div className="summary-template-picker">
           <label htmlFor="recording-summary-template">Template</label>
           <Select id="recording-summary-template" label="Summary template" value={selectedTemplate}
             options={SUMMARY_TEMPLATE_OPTIONS} disabled={processing} onValueChange={setSelectedTemplate} />
-        </div>}
+        </div>
         {summaryError && <p className="player-error" role="alert">{summaryError}</p>}
         {recording.summary ? (
           <div className="summary-body">
@@ -861,29 +915,42 @@ export function RecordingDetail({ recording, deleted, whisperModelPath, summaryM
 
       <section className="detail-section transcript-section">
         <div className="section-heading">
-          <div><h2>Transcript</h2>{recording.transcript?.language && <span>{recording.transcript.language}</span>}</div>
-          {!deleted && (whisperModelPath ? (
+          <div><h2>Transcript</h2>{recording.transcript && <span>{[
+            recording.transcript.source === "cloud" ? `Cloud · OpenAI / ${recording.transcript.model ?? CLOUD_TRANSCRIPTION_MODEL}` : recording.transcript.source === "local" ? `Local · ${recording.transcript.model ?? "Whisper"}` : null,
+            recording.transcript.language,
+          ].filter(Boolean).join(" · ")}</span>}</div>
+          {transcriptionReady ? (
             <button className="button secondary compact-button" disabled={processing || recording.sizeBytes === 0} onClick={async () => {
-              if (!onJobStart(recording, "transcription", "Preparing audio")) return;
+              if (!onJobStart(recording, "transcription", transcriptionSource === "cloud" ? "Transcribing with OpenAI" : "Preparing audio")) return;
               setTranscriptionError(null);
               try {
-                onChanged(await api.transcribeRecording(recording.id));
+                onChanged(await api.transcribeRecording(recording.id, { source: transcriptionSource }));
               } catch (cause) {
                 setTranscriptionError(cause instanceof Error ? cause.message : String(cause));
               } finally {
                 onJobEnd(recording.id, "transcription");
               }
-            }}>{transcribing ? "Transcribing…" : recording.transcript ? "Transcribe again" : "Transcribe"}</button>
-          ) : <button className="button secondary compact-button" onClick={onChooseWhisperModel}>Choose Whisper model</button>)}
+            }}>{transcribing ? "Transcribing…" : transcriptionSource === "cloud" ? (recording.transcript ? "Transcribe again with Cloud" : "Transcribe with Cloud") : recording.transcript ? "Transcribe again" : "Transcribe"}</button>
+          ) : <button className="button secondary compact-button" onClick={transcriptionSource === "cloud" ? onOpenTranscriptionSettings : onChooseWhisperModel}>{transcriptionSource === "cloud" ? "Set up cloud transcription" : "Choose Whisper model"}</button>}
         </div>
+        <div className="summary-template-picker">
+          <label htmlFor="recording-transcription-source">Processing</label>
+          <Select id="recording-transcription-source" label="Transcription processing" value={transcriptionSource} options={TRANSCRIPTION_SOURCE_OPTIONS}
+            disabled={processing} onValueChange={(value) => { setTranscriptionSource(value as TranscriptionSource); setTranscriptionError(null); }} />
+        </div>
+        <p className="summary-processing-note">{transcriptionSource === "cloud"
+          ? `Cloud · OpenAI / ${CLOUD_TRANSCRIPTION_MODEL}. Audio will be sent to OpenAI when you transcribe. Provider charges may apply. Cloud transcripts do not include timestamps.`
+          : "Local · Audio is transcribed on this computer with Whisper."}</p>
         {transcriptionError && <p className="player-error" role="alert">{transcriptionError}</p>}
         {recording.transcript ? (
           <div className="transcript-body">
-            {recording.transcript.segments.map((segment, index) => (
+            {recording.transcript.segments.length ? recording.transcript.segments.map((segment, index) => (
               <p key={`${segment.startMs}-${index}`}><time>{formatDuration(segment.startMs)}</time><span>{segment.text}</span></p>
-            ))}
+            )) : <p className="transcript-plain-text">{recording.transcript.text}</p>}
           </div>
-        ) : <p className="section-empty">{whisperModelPath ? "Create a private, on-device transcript with Whisper." : "Choose a local open-source Whisper model to enable transcription."}</p>}
+        ) : <p className="section-empty">{transcriptionSource === "cloud"
+          ? transcriptionKeyStored ? "Transcribe with OpenAI using your saved API key." : "Add your OpenAI API key in Settings → Transcription to use Cloud."
+          : whisperModelPath ? "Create a private, on-device transcript with Whisper." : "Choose a local open-source Whisper model to enable transcription."}</p>}
       </section>
 
       <section className="detail-section">
@@ -898,7 +965,21 @@ export function RecordingDetail({ recording, deleted, whisperModelPath, summaryM
         <dl><div><dt>Mode</dt><dd>{recording.mode === "online" ? "Microphone + computer" : "Microphone"}</dd></div><div><dt>Format</dt><dd>{recording.codec || "AAC-LC"}</dd></div><div><dt>Status</dt><dd>{recording.status === "recovered" ? "Recovered after interruption" : "Stored securely"}</dd></div></dl>
       </section>
 
-      {!deleted && <button className="danger-link" disabled={busy} onClick={async () => { if (window.confirm("Move this recording to Recently Deleted?")) { await api.deleteRecording(recording.id); onRemoved(); } }}><TrashIcon /> Move to Recently Deleted</button>}
+      {deleteError && <p className="player-error" role="alert">{deleteError}</p>}
+      <button className="danger-link" disabled={busy || transcribing || summarizing || publishing || loadingPublishProjects} onClick={async () => {
+        if (busy) return;
+        setBusy(true);
+        setDeleteError(null);
+        try {
+          if (!await api.confirmRecordingDeletion([recording])) return;
+          await api.deleteRecording(recording.id);
+          onRemoved();
+        } catch (cause) {
+          setDeleteError(cause instanceof Error ? cause.message : String(cause));
+        } finally {
+          setBusy(false);
+        }
+      }}><TrashIcon /> Delete recording</button>
     </div>
   );
 }
@@ -906,6 +987,7 @@ export function RecordingDetail({ recording, deleted, whisperModelPath, summaryM
 function IntegrationsPage({ app }: { app: AppController }) {
   const [connected, setConnected] = useState<boolean | null>(null);
   const [token, setToken] = useState("");
+  const [connecting, setConnecting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -924,12 +1006,14 @@ function IntegrationsPage({ app }: { app: AppController }) {
   }, []);
 
   const connect = async () => {
+    if (busy || !token.trim()) return;
     setBusy(true);
     setError(null);
     try {
       const integration = await api.connectOakOs(token);
       setConnected(integration.connected);
       setToken("");
+      setConnecting(false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -944,6 +1028,7 @@ function IntegrationsPage({ app }: { app: AppController }) {
       const updated = await app.disconnectOakOs();
       if (updated) {
         setConnected(false);
+        setConnecting(false);
       }
     } finally {
       setBusy(false);
@@ -953,31 +1038,29 @@ function IntegrationsPage({ app }: { app: AppController }) {
   return (
     <div className="settings-page integrations-page">
       <header className="content-header"><div><h1>Integrations</h1><p>Connect Eavesdrop to external applications.</p></div></header>
-      <section className="settings-section integration-section">
-        <div className="integration-heading">
-          <div><h2>OakOS</h2><p>Publish recordings to an OakOS project for transcription and follow-up.</p></div>
-          {connected !== null && <span className={connected ? "integration-status connected" : "integration-status"}>{connected ? "Connected" : "Not connected"}</span>}
-        </div>
-
-        {error && <p className="integration-error" role="alert">{error}</p>}
-
-        {connected ? (
-          <div className="integration-connected">
-            <p>Choose the destination project each time you publish a recording. OakOS processes the audio asynchronously.</p>
-            <div className="integration-actions">
-              <button className="button secondary" disabled={busy} onClick={() => void disconnect()}>Disconnect</button>
+      <div className="integrations-grid">
+        <IntegrationCard id="oakos" title="OakOS" logo={oakLogo} connected={connected}
+          description="Send recordings to your OakOS projects for transcription, summaries, and follow-up.">
+          {error && <p className="integration-error" role="alert">{error}</p>}
+          {connected ? (
+            <div className="integration-connected">
+              <p>Choose a project each time you publish a recording.</p>
+              <button className="button secondary" disabled={busy} onClick={() => void disconnect()}>{busy ? "Disconnecting…" : "Disconnect"}</button>
             </div>
-          </div>
-        ) : connected === false ? (
-          <div className="integration-connect-form">
-            <label className="field-label" htmlFor="oakos-token">Personal access token
-              <input id="oakos-token" type="password" value={token} autoComplete="off" spellCheck={false} placeholder="oakos_pat_…" disabled={busy} onChange={(event) => setToken(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && token.trim()) void connect(); }} />
-            </label>
-            <p>The token is stored in this computer’s secure credential store.</p>
-            <button className="button primary" disabled={busy || !token.trim()} onClick={() => void connect()}>{busy ? "Connecting…" : "Connect OakOS"}</button>
-          </div>
-        ) : <p className="settings-description">Checking OakOS connection…</p>}
-      </section>
+          ) : connected === false ? (
+            connecting ? <form className="integration-connect-form" onSubmit={(event) => { event.preventDefault(); void connect(); }}>
+              <label className="field-label" htmlFor="oakos-token">Personal access token
+                <input id="oakos-token" type="password" value={token} autoFocus autoComplete="off" spellCheck={false} placeholder="oakos_pat_…" disabled={busy} onChange={(event) => setToken(event.target.value)} />
+              </label>
+              <p>Your token is stored securely on this computer.</p>
+              <div className="integration-actions">
+                <button className="button secondary" type="button" disabled={busy} onClick={() => { setConnecting(false); setToken(""); setError(null); }}>Cancel</button>
+                <button className="button primary" type="submit" disabled={busy || !token.trim()}>{busy ? "Connecting…" : "Connect"}</button>
+              </div>
+            </form> : <button className="button secondary" onClick={() => setConnecting(true)}>Connect OakOS</button>
+          ) : <button className="button secondary" disabled>Checking connection…</button>}
+        </IntegrationCard>
+      </div>
     </div>
   );
 }
@@ -1085,7 +1168,7 @@ function SettingsPage({ app, updater, models, tab, onTabChange, initialSummarySe
   const modelPercentage = percentageOf(installingModel ? models.download : null);
   const summaryModelPercentage = percentageOf(installingSummaryModel ? models.download : null);
   const modelBusy = models.download !== null;
-  const whisperInUse = selectedModel ? modelPathContainsId(snapshot.settings.whisperModelPath, selectedModel.id) : false;
+  const whisperInUse = snapshot.settings.transcriptionSource === "local" && selectedModel ? modelPathContainsId(snapshot.settings.whisperModelPath, selectedModel.id) : false;
   const summaryInUse = selectedSummary && snapshot.settings.summarySource === "local" ? modelPathContainsId(snapshot.settings.summaryModelPath, selectedSummary.id) : false;
   return (
     <div className="settings-page">
@@ -1120,6 +1203,14 @@ function SettingsPage({ app, updater, models, tab, onTabChange, initialSummarySe
         </>,
         transcription: <>
           <section className="settings-section">
+            <SettingToggle label="Auto transcribe" description={snapshot.settings.transcriptionSource === "cloud"
+              ? "Transcribe new recordings after saving. Audio is sent to OpenAI automatically; provider charges may apply."
+              : "Transcribe new recordings after saving with your selected local Whisper model."}
+              checked={snapshot.settings.autoTranscribe} onChange={(autoTranscribe) => app.updateSettings({ autoTranscribe })} />
+          </section>
+          <CloudTranscriptionSettings settings={snapshot.settings} keys={models.cloudKeys} keyError={models.cloudKeyError}
+            onSave={app.updateSettings} onKeysChanged={models.reloadCloudKeys} />
+          <section className="settings-section">
             <h2>Local transcription</h2>
             <div className="model-setting">
               <div><strong>Open-source Whisper</strong><p>{snapshot.settings.whisperModelPath ? `Using ${modelFileName(snapshot.settings.whisperModelPath)}` : "Install a model once, then transcribe without sending audio anywhere."}</p></div>
@@ -1132,7 +1223,7 @@ function SettingsPage({ app, updater, models, tab, onTabChange, initialSummarySe
                 }}>Delete</button>}
                 <button className="button secondary" disabled={modelBusy} onClick={async () => {
                   const path = await api.selectWhisperModel();
-                  if (path) await app.updateSettings({ whisperModelPath: path });
+                  if (path) await app.updateSettings({ whisperModelPath: path, transcriptionSource: "local" });
                 }}>Choose existing…</button>
               </div>
               {selectedModel && <p className="model-description">{selectedModel.description}</p>}
@@ -1141,6 +1232,12 @@ function SettingsPage({ app, updater, models, tab, onTabChange, initialSummarySe
           </section>
         </>,
         summaries: <>
+          <section className="settings-section">
+            <SettingToggle label="Auto summarize" description={snapshot.settings.summarySource === "cloud"
+              ? `Summarize after transcription using your default template. Transcripts are sent to ${providerName(snapshot.settings.cloudProvider)} automatically; provider charges may apply.`
+              : "Summarize after transcription using your selected local model and default template. Also applies to manual transcription."}
+              checked={snapshot.settings.autoSummarize} onChange={(autoSummarize) => app.updateSettings({ autoSummarize })} />
+          </section>
           <section className="settings-section">
             <h2>Summary processing</h2>
             <div className="summary-default-setting">
@@ -1238,7 +1335,7 @@ function Onboarding({ app }: { app: AppController }) {
   return (
     <main className="onboarding">
       <div className="onboarding-bar" onMouseDown={beginWindowDrag}><div className="wordmark"><BrandMark /> Eavesdrop</div><span>Setup {step + 1} of 3</span></div>
-      {step === 0 && <section className="onboarding-content"><div className="onboarding-icon"><RecordingsIcon /></div><h1>Record the room and the call</h1><p>Eavesdrop captures in-person conversations through your microphone and online meetings directly from your computer—without joining as a bot.</p><ul className="plain-checks"><li>Recordings stay encrypted on this computer</li><li>Nothing is uploaded automatically</li><li>A red indicator is always visible while recording</li></ul><div className="onboarding-actions"><button className="button primary" onClick={() => setStep(1)}>Continue</button></div></section>}
+      {step === 0 && <section className="onboarding-content"><div className="onboarding-icon"><RecordingsIcon /></div><h1>Record the room and the call</h1><p>Eavesdrop captures in-person conversations through your microphone and online meetings directly from your computer—without joining as a bot.</p><ul className="plain-checks"><li>Recordings stay encrypted on this computer</li><li>Cloud uploads are off by default</li><li>A red indicator is always visible while recording</li></ul><div className="onboarding-actions"><button className="button primary" onClick={() => setStep(1)}>Continue</button></div></section>}
       {step === 1 && <section className="onboarding-content"><div className="onboarding-icon"><MicIcon /></div><h1>Allow recording access</h1><p>Microphone access records people near you. Computer audio access records voices from Zoom, Teams, and Google Meet, including when headphones are connected.</p><div className="permission-list"><PermissionRow label="Microphone" state={snapshot.permissions.microphone} /><PermissionRow label="Computer audio" state={snapshot.permissions.systemAudio} /></div><div className="onboarding-actions"><button className="button secondary" onClick={() => setStep(0)}>Back</button><button className="button primary" onClick={async () => { if (screenDenied) await api.openScreenRecordingSettings(); else await app.requestPermissions(); }}>{screenDenied ? "Open Settings" : "Allow access"}</button><button className="button secondary" disabled={!granted} onClick={() => setStep(2)}>Continue</button></div></section>}
       {step === 2 && <section className="onboarding-content"><div className="onboarding-icon"><SettingsIcon /></div><h1>Keep it within reach</h1><p>Eavesdrop works best when it starts quietly with your computer and waits in the menu bar or system tray.</p><SettingToggle label="Launch Eavesdrop at login" description="You can change this later in Settings." checked={launchAtLogin} onChange={setLaunchAtLogin} /><div className="consent-box"><strong>Recording responsibly</strong><p>Make sure everyone knows and agrees before you start. Recording laws differ by location.</p></div><div className="onboarding-actions"><button className="button secondary" onClick={() => setStep(1)}>Back</button><button className="button primary" onClick={() => app.completeOnboarding(launchAtLogin)}>Finish setup</button></div></section>}
       {app.error && <InlineError message={app.error} onClose={app.clearError} />}

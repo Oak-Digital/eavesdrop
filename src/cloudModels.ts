@@ -1,5 +1,11 @@
 import type { CloudProvider } from "./types";
 
+export const TRANSCRIPTION_SOURCE_OPTIONS = [
+  { value: "local", label: "Local", description: "Whisper · Runs on your computer" },
+  { value: "cloud", label: "Cloud", description: "OpenAI · Sends audio to the cloud" },
+];
+export const CLOUD_TRANSCRIPTION_MODEL = "gpt-transcribe";
+
 export const SUMMARY_SOURCE_OPTIONS = [
   { value: "local", label: "Local", description: "Runs on your computer" },
   { value: "cloud", label: "Cloud", description: "Sends the transcript to an API provider" },

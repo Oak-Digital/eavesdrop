@@ -136,7 +136,7 @@ pub fn remove_model(models_dir: &Path, model_id: &str) -> AppResult<PathBuf> {
     Ok(path)
 }
 
-fn emit_transcription_progress(
+pub(crate) fn emit_transcription_progress(
     app: &AppHandle,
     recording_id: &str,
     stage: TranscriptionStage,
@@ -245,6 +245,10 @@ pub fn transcribe(
     let language = get_lang_str_full(state.full_lang_id_from_state()).map(str::to_string);
 
     Ok(Transcript {
+        source: Some(crate::cloud_transcription::TranscriptionSource::Local),
+        model: model_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned()),
         text,
         language,
         created_at: Utc::now().to_rfc3339(),
@@ -252,7 +256,7 @@ pub fn transcribe(
     })
 }
 
-fn decode_m4a_to_mono(m4a: &[u8]) -> AppResult<Vec<f32>> {
+pub(crate) fn decode_m4a_to_mono(m4a: &[u8]) -> AppResult<Vec<f32>> {
     let mut reader = mp4::Mp4Reader::read_header(Cursor::new(m4a), m4a.len() as u64)
         .map_err(|error| AppError::Audio(format!("could not open recording: {error}")))?;
     let (track_id, source_rate, channels, sample_count) = {

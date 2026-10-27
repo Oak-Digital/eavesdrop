@@ -1,8 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 import type {
   AppSettings,
+  AutomaticProcessingStatus,
   CloudKeyStatus,
   CloudProvider,
   SummaryTarget,
@@ -21,6 +22,7 @@ import type {
   SummaryModelDownloadProgress,
   SummaryModelInfo,
   TranscriptionProgress,
+  TranscriptionTarget,
   WhisperModelDownloadProgress,
   WhisperModelInfo,
 } from "./types";
@@ -56,6 +58,9 @@ const mockSnapshot: AppSnapshot = {
     summaryPrompt: null,
     summaryTemplate: DEFAULT_SUMMARY_TEMPLATE,
     summarySource: "local",
+    transcriptionSource: "local",
+    autoTranscribe: false,
+    autoSummarize: false,
     cloudProvider: "openai",
     cloudModel: "gpt-5.4-mini",
   },
@@ -71,11 +76,52 @@ let browserHighlights: Recording["highlights"] = [];
 let browserOakOsConnected = false;
 let browserCloudKeys = new Set<CloudProvider>();
 const browserOakOsProjects: OakOsProject[] = [
-  { id: "oak-project-one", name: "Product" },
-  { id: "oak-project-two", name: "Research" },
+  { id: "oak-project-one", name: "Product", identifier: "OAK2601", client: { id: "oak-client", name: "Oak Digital" } },
+  { id: "oak-project-two", name: "Research", identifier: "DIF2602", client: { id: "dif-client", name: "DIF" } },
+  { id: "oak-project-three", name: "Website", identifier: "OAK2603", client: { id: "oak-client", name: "Oak Digital" } },
 ];
 const browserSessionListeners = new Set<(session: RecordingSession) => void>();
 const browserRecordingFinalizedListeners = new Set<(recording: Recording) => void>();
+const browserRecordingUpdatedListeners = new Set<(recording: Recording) => void>();
+const browserAutomaticListeners = new Set<(status: AutomaticProcessingStatus) => void>();
+let browserAutomaticStatus: AutomaticProcessingStatus | null = null;
+let browserAutomaticQueue = Promise.resolve();
+let browserGeneration = 0;
+
+function emitBrowserRecordingUpdated(recording: Recording) {
+  browserRecordingUpdatedListeners.forEach((handler) => handler(structuredClone(recording)));
+}
+
+function enqueueBrowserAutomatic(id: string, transcriptVersion?: string) {
+  const generation = browserGeneration;
+  browserAutomaticQueue = browserAutomaticQueue.then(async () => {
+    if (generation !== browserGeneration) return;
+    const settings = browserSnapshot.settings;
+    const recording = browserRecordings.find((item) => item.id === id);
+    if (!recording) return;
+    const summary = transcriptVersion !== undefined;
+    if (summary ? !settings.autoSummarize || recording.transcript?.createdAt !== transcriptVersion || !recording.transcript.text.trim()
+      : !settings.autoTranscribe || recording.transcript !== null) return;
+    const status: AutomaticProcessingStatus = { recordingId: id, title: recording.title, kind: summary ? "summary" : "transcription", active: true, error: null };
+    const publish = () => {
+      if (generation !== browserGeneration) return;
+      browserAutomaticStatus = structuredClone(status);
+      browserAutomaticListeners.forEach((handler) => handler(structuredClone(status)));
+    };
+    publish();
+    try {
+      if (summary) {
+        if (settings.summarySource === "local" && !settings.summaryModelPath) throw new Error("Install a Local summary model in Settings first");
+        emitBrowserRecordingUpdated(await summarizeRecording(id));
+      } else {
+        if (settings.transcriptionSource === "local" && !settings.whisperModelPath) throw new Error("Choose a local Whisper model in Settings first");
+        emitBrowserRecordingUpdated(await transcribeRecording(id));
+      }
+    } catch (cause) { status.error = cause instanceof Error ? cause.message : String(cause); }
+    finally { status.active = false; publish(); }
+  });
+}
+
 
 function updateBrowserSessionTiming(now = Date.now()) {
   if (!browserRecordingClock) return;
@@ -258,12 +304,13 @@ export async function stopRecording(): Promise<Recording> {
   browserHighlights = [];
   emitBrowserSession();
   emitBrowserRecordingFinalized(recording);
+  if (browserSnapshot.settings.autoTranscribe) enqueueBrowserAutomatic(recording.id);
   return structuredClone(recording);
 }
 
-export async function listRecordings(includeDeleted = false): Promise<Recording[]> {
-  if (isTauri()) return command<Recording[]>("list_recordings", { includeDeleted });
-  return structuredClone(browserRecordings.filter((item) => includeDeleted ? item.deletedAt : !item.deletedAt));
+export async function listRecordings(): Promise<Recording[]> {
+  if (isTauri()) return command<Recording[]>("list_recordings");
+  return structuredClone(browserRecordings);
 }
 
 export async function renameRecording(id: string, title: string): Promise<Recording> {
@@ -273,31 +320,28 @@ export async function renameRecording(id: string, title: string): Promise<Record
   return structuredClone(item);
 }
 
-export async function deleteRecording(id: string): Promise<void> {
-  if (isTauri()) return command<void>("delete_recording", { id });
-  const item = browserRecordings.find((recording) => recording.id === id);
-  if (item) item.deletedAt = new Date().toISOString();
+export async function confirmRecordingDeletion(recordings: Pick<Recording, "title">[]): Promise<boolean> {
+  if (!recordings.length) return false;
+  const subject = recordings.length === 1 ? `“${recordings[0].title}”` : `${recordings.length} recordings`;
+  const message = `Permanently delete ${subject}? The audio, transcripts, summaries, and highlights will be removed from this computer. This cannot be undone.`;
+  if (!isTauri()) return window.confirm(message);
+  return confirm(message, {
+    title: recordings.length === 1 ? "Delete recording?" : "Delete recordings?",
+    kind: "warning",
+    okLabel: "Delete permanently",
+    cancelLabel: "Cancel",
+  });
 }
 
-export async function restoreRecording(id: string): Promise<void> {
-  if (isTauri()) return command<void>("restore_recording", { id });
-  const item = browserRecordings.find((recording) => recording.id === id);
-  if (item) item.deletedAt = null;
+export async function deleteRecording(id: string): Promise<void> {
+  if (isTauri()) return command<void>("delete_recording", { id });
+  return deleteRecordings([id]);
 }
 
 export async function deleteRecordings(ids: string[]): Promise<void> {
   if (isTauri()) return command<void>("delete_recordings", { ids });
-  const deletedAt = new Date().toISOString();
-  browserRecordings.forEach((recording) => {
-    if (ids.includes(recording.id)) recording.deletedAt = deletedAt;
-  });
-}
-
-export async function restoreRecordings(ids: string[]): Promise<void> {
-  if (isTauri()) return command<void>("restore_recordings", { ids });
-  browserRecordings.forEach((recording) => {
-    if (ids.includes(recording.id)) recording.deletedAt = null;
-  });
+  if (ids.some((id) => !browserRecordings.some((item) => item.id === id))) throw new Error("Recording not found");
+  browserRecordings = browserRecordings.filter((item) => !ids.includes(item.id));
 }
 
 export async function exportRecording(recording: Recording): Promise<void> {
@@ -338,15 +382,22 @@ export async function selectWhisperModel(): Promise<string | null> {
   return typeof path === "string" ? path : null;
 }
 
-export async function transcribeRecording(id: string): Promise<Recording> {
-  if (isTauri()) return command<Recording>("transcribe_recording", { id });
-  const item = browserRecordings.find((recording) => recording.id === id)!;
+export async function transcribeRecording(id: string, target?: TranscriptionTarget): Promise<Recording> {
+  if (isTauri()) return command<Recording>("transcribe_recording", { id, target });
+  const source = target?.source ?? browserSnapshot.settings.transcriptionSource;
+  if (source === "cloud" && !browserCloudKeys.has("openai")) throw new Error("Add your OpenAI API key in Settings first");
+  const item = browserRecordings.find((recording) => recording.id === id);
+  if (!item) throw new Error("Recording not found");
+  const text = source === "cloud" ? "Example cloud transcript." : "Example local transcript.";
   item.transcript = {
-    text: "Example local transcript.",
+    text,
     language: "English",
     createdAt: new Date().toISOString(),
-    segments: [{ startMs: 0, endMs: 2000, text: "Example local transcript." }],
+    segments: source === "cloud" ? [] : [{ startMs: 0, endMs: 2000, text }],
+    source,
+    model: source === "cloud" ? "gpt-transcribe" : "Whisper",
   };
+  if (browserSnapshot.settings.autoSummarize) enqueueBrowserAutomatic(id, item.transcript.createdAt);
   return structuredClone(item);
 }
 
@@ -443,6 +494,7 @@ export async function listWhisperModels(): Promise<WhisperModelInfo[]> {
 export async function installWhisperModel(modelId: string): Promise<AppSnapshot> {
   if (isTauri()) return command<AppSnapshot>("install_whisper_model", { modelId });
   browserInstalledWhisperModels.add(modelId);
+  browserSnapshot.settings.transcriptionSource = "local";
   browserSnapshot.settings.whisperModelPath = `/models/ggml-${modelId}.bin`;
   return structuredClone(browserSnapshot);
 }
@@ -450,6 +502,7 @@ export async function installWhisperModel(modelId: string): Promise<AppSnapshot>
 export async function useWhisperModel(modelId: string): Promise<AppSnapshot> {
   if (isTauri()) return command<AppSnapshot>("use_whisper_model", { modelId });
   if (!browserInstalledWhisperModels.has(modelId)) throw new Error("This Whisper model is not installed");
+  browserSnapshot.settings.transcriptionSource = "local";
   browserSnapshot.settings.whisperModelPath = `/models/ggml-${modelId}.bin`;
   return structuredClone(browserSnapshot);
 }
@@ -568,6 +621,11 @@ export function resetBrowserMock() {
   browserCloudKeys.clear();
   browserSessionListeners.clear();
   browserRecordingFinalizedListeners.clear();
+  browserRecordingUpdatedListeners.clear();
+  browserAutomaticListeners.clear();
+  browserAutomaticStatus = null;
+  browserAutomaticQueue = Promise.resolve();
+  browserGeneration += 1;
 }
 
 export async function getCloudKeyStatuses(): Promise<CloudKeyStatus[]> {
@@ -585,4 +643,25 @@ export async function saveCloudApiKey(provider: CloudProvider, apiKey: string): 
 export async function removeCloudApiKey(provider: CloudProvider): Promise<void> {
   if (isTauri()) return command<void>("remove_cloud_api_key", { provider });
   browserCloudKeys.delete(provider);
+}
+
+export async function onRecordingUpdated(handler: (recording: Recording) => void): Promise<UnlistenFn> {
+  if (!isTauri()) {
+    browserRecordingUpdatedListeners.add(handler);
+    return () => browserRecordingUpdatedListeners.delete(handler);
+  }
+  return listen<Recording>("recording-updated", (event) => handler(event.payload));
+}
+
+export async function onAutomaticProcessing(handler: (status: AutomaticProcessingStatus) => void): Promise<UnlistenFn> {
+  if (!isTauri()) {
+    browserAutomaticListeners.add(handler);
+    return () => browserAutomaticListeners.delete(handler);
+  }
+  return listen<AutomaticProcessingStatus>("automatic-processing", (event) => handler(event.payload));
+}
+
+export async function getAutomaticProcessingStatus(): Promise<AutomaticProcessingStatus | null> {
+  if (isTauri()) return command<AutomaticProcessingStatus | null>("get_automatic_processing_status");
+  return structuredClone(browserAutomaticStatus);
 }

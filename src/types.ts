@@ -28,6 +28,8 @@ export interface TranscriptSegment {
 }
 
 export interface Transcript {
+  source?: TranscriptionSource | null;
+  model?: string | null;
   text: string;
   language: string | null;
   createdAt: string;
@@ -90,7 +92,7 @@ export interface ModelDownloadStatus {
   active: boolean;
 }
 
-export type TranscriptionStage = "decoding" | "transcribing";
+export type TranscriptionStage = "decoding" | "transcribing" | "cloudTranscribing";
 
 export interface TranscriptionProgress {
   recordingId: string;
@@ -134,12 +136,18 @@ export interface PermissionState {
   systemAudio: "granted" | "denied" | "not_determined" | "unavailable";
 }
 
+export type TranscriptionSource = "local" | "cloud";
+export interface TranscriptionTarget { source: TranscriptionSource }
+
 export type SummarySource = "local" | "cloud";
 export type CloudProvider = "openai" | "anthropic";
 export type SummaryTarget = { source: "local" } | { source: "cloud"; provider: CloudProvider; model: string };
 export interface CloudKeyStatus { provider: CloudProvider; keyStored: boolean }
 
 export interface AppSettings {
+  autoTranscribe: boolean;
+  autoSummarize: boolean;
+  transcriptionSource: TranscriptionSource;
   summarySource: SummarySource;
   cloudProvider: CloudProvider;
   cloudModel: string;
@@ -161,6 +169,8 @@ export interface OakOsIntegration {
 export interface OakOsProject {
   id: string;
   name: string;
+  identifier?: string | null;
+  client?: { id: string; name: string } | null;
 }
 
 export interface OakOsPublishResult {
@@ -189,4 +199,12 @@ export interface AudioLevels {
 export interface StartRecordingInput {
   mode: CaptureMode;
   detectedApp?: string;
+}
+
+export interface AutomaticProcessingStatus {
+  recordingId: string;
+  title: string;
+  kind: "transcription" | "summary";
+  active: boolean;
+  error: string | null;
 }

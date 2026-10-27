@@ -16,6 +16,7 @@ import {
 import snapshot from "./release-snapshot.json";
 import { detectPlatform } from "./platform";
 import { RecorderHero } from "./RecorderHero";
+import { PrivacyVault } from "./PrivacyVault";
 import ReleaseNotes from "./ReleaseNotes";
 
 const Demo = lazy(() => import("./Demo"));
@@ -371,20 +372,7 @@ export default function App() {
             id="privacy"
             aria-labelledby="privacy-title"
           >
-            <div className="privacy-illustration" aria-hidden="true">
-              <pre>{`       ┌──────────────────┐
-       │                  │
-       │    ░░▒▒▓▓▒▒░░    │
-       │    ░▒▓███▓▒░░    │
-       │    ░░▒▓█▓▒░░░    │
-       │                  │
-       └────────┬─┬───────┘
-            ────┴─┴────
-
-       [ your computer ]
-               ↑
-        your conversations`}</pre>
-            </div>
+            <PrivacyVault />
             <div className="privacy-copy">
               <Icon name="lock" size={25} />
               <h2 id="privacy-title">

@@ -18,6 +18,17 @@ pub struct OakOsIntegration {
 pub struct OakOsProject {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub identifier: Option<String>,
+    #[serde(default)]
+    pub client: Option<OakOsClientInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OakOsClientInfo {
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -264,6 +275,29 @@ fn safe_filename(title: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_responses_preserve_clients_and_allow_unassigned_projects() {
+        let page: Collection<OakOsProject> = serde_json::from_value(serde_json::json!({
+            "data": [
+                {"id":"one","name":"Website","identifier":"AC2601", "client":{"id":"acme","name":"Acme","slug":"acme"}},
+                {"id":"two","name":"Internal","client":null},
+                {"id":"legacy","name":"Legacy"}
+            ],
+            "pagination":{"nextCursor":"next"}
+        })).unwrap();
+        assert_eq!(page.data[0].client.as_ref().unwrap().name, "Acme");
+        assert_eq!(page.data[0].identifier.as_deref(), Some("AC2601"));
+        assert!(page.data[1].client.is_none());
+        assert!(page.data[2].client.is_none());
+        assert_eq!(
+            page.pagination.unwrap().next_cursor.as_deref(),
+            Some("next")
+        );
+        let payload = serde_json::to_value(&page.data[0]).unwrap();
+        assert_eq!(payload["client"]["id"], "acme");
+        assert_eq!(payload["identifier"], "AC2601");
+    }
 
     #[test]
     fn filenames_are_safe_for_content_disposition() {

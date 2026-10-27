@@ -14,7 +14,7 @@ use crate::{
     models::{
         AppSnapshot, CaptureMode, ModelDownloadStatus, Recording, RecordingPhase, RecordingSession,
         SettingsPatch, StartRecordingInput, SummarizationProgress, SummarizationStage, Summary,
-        SummaryModelDownloadProgress, SummaryModelInfo, Transcript, WhisperModelInfo,
+        SummaryModelDownloadProgress, SummaryModelInfo, WhisperModelInfo,
     },
     platform,
     storage::Repository,
@@ -22,6 +22,9 @@ use crate::{
 
 pub struct AppState {
     pub repository: Repository,
+    pub(crate) processing_lock: Mutex<()>,
+    pub(crate) automatic_status:
+        Mutex<Option<crate::automatic_processing::AutomaticProcessingStatus>>,
     pub vault: Vault,
     models_dir: PathBuf,
     runtime: Mutex<RuntimeState>,
@@ -59,6 +62,8 @@ impl AppState {
         let models_dir = app_data.join("models");
         let state = Self {
             repository,
+            processing_lock: Mutex::new(()),
+            automatic_status: Mutex::new(None),
             vault,
             models_dir,
             runtime: Mutex::new(RuntimeState {
@@ -73,9 +78,6 @@ impl AppState {
             summarization_active: Mutex::new(false),
         };
         state.recover_unfinished()?;
-        for path in state.repository.purge_expired()? {
-            let _ = fs::remove_file(path);
-        }
         Ok(state)
     }
 
@@ -124,7 +126,7 @@ impl AppState {
         let id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now();
         let started_at = now.to_rfc3339();
-        let title = default_title(input.mode, input.detected_app.as_deref());
+        let title = default_title();
         let key = self.vault.create_recording_key()?;
         let journal_path = self.vault.journal_path(&id);
         if fs2::available_space(journal_path.parent().unwrap_or(Path::new("."))).unwrap_or(u64::MAX)
@@ -301,7 +303,42 @@ impl AppState {
         let _ = app.emit("recording-state-changed", session_from_runtime(&runtime));
         let recording = self.repository.recording(&id)?;
         let _ = app.emit("recording-finalized", &recording);
+        drop(runtime);
+        if self
+            .repository
+            .settings()
+            .is_ok_and(|settings| settings.auto_transcribe)
+        {
+            crate::automatic_processing::enqueue(app, &id, None);
+        }
         Ok(recording)
+    }
+
+    pub fn delete_recordings(&self, ids: &[String]) -> AppResult<()> {
+        let _processing = self.processing_lock.try_lock().map_err(|_| {
+            AppError::State(
+                "wait for transcription or summarization to finish before deleting recordings"
+                    .into(),
+            )
+        })?;
+        let mut runtime = self
+            .runtime
+            .lock()
+            .map_err(|_| AppError::State("recording lock poisoned".into()))?;
+        ensure_recordings_can_be_deleted(
+            &runtime.phase,
+            runtime.active.as_ref().map(|active| active.id.as_str()),
+            ids,
+        )?;
+        self.repository.delete_recordings(ids)?;
+        if runtime
+            .last_ready_id
+            .as_ref()
+            .is_some_and(|id| ids.contains(id))
+        {
+            runtime.last_ready_id = None;
+        }
+        Ok(())
     }
 
     pub fn decrypt_recording(&self, id: &str) -> AppResult<Vec<u8>> {
@@ -313,19 +350,69 @@ impl AppState {
         self.vault.open_asset(Path::new(&path), &key)
     }
 
-    pub fn transcribe_recording(&self, app: &AppHandle, id: &str) -> AppResult<Recording> {
-        let settings = self.repository.settings()?;
-        let model_path = settings.whisper_model_path.ok_or_else(|| {
-            AppError::State("choose a local Whisper model in Settings first".into())
+    pub fn transcribe_recording(
+        &self,
+        app: &AppHandle,
+        id: &str,
+        target: Option<crate::cloud_transcription::TranscriptionTarget>,
+    ) -> AppResult<Recording> {
+        let guard = self.processing_lock.try_lock().map_err(|_| {
+            AppError::State("another transcription or summary is already running".into())
         })?;
+        let recording = self.transcribe_recording_inner(app, id, target)?;
+        let _ = app.emit("recording-updated", &recording);
+        drop(guard);
+        crate::automatic_processing::after_transcription(app, &recording);
+        Ok(recording)
+    }
+
+    pub(crate) fn transcribe_recording_inner(
+        &self,
+        app: &AppHandle,
+        id: &str,
+        target: Option<crate::cloud_transcription::TranscriptionTarget>,
+    ) -> AppResult<Recording> {
+        use crate::cloud_transcription::TranscriptionSource;
+        let settings = self.repository.settings()?;
+        let source = target.map_or(settings.transcription_source, |target| target.source);
+        let model_path = if source == TranscriptionSource::Local {
+            Some(settings.whisper_model_path.ok_or_else(|| {
+                AppError::State("choose a local Whisper model in Settings first".into())
+            })?)
+        } else {
+            None
+        };
         let audio = self.decrypt_recording(id)?;
-        let transcript: Transcript =
-            crate::transcription::transcribe(app, id, &audio, Path::new(&model_path))?;
+        let transcript = match source {
+            TranscriptionSource::Local => crate::transcription::transcribe(
+                app,
+                id,
+                &audio,
+                Path::new(model_path.as_ref().unwrap()),
+            )?,
+            TranscriptionSource::Cloud => crate::cloud_transcription::transcribe(app, id, &audio)?,
+        };
+        // Replace a previous transcript only after every chunk has succeeded.
         self.repository.save_transcript(id, &transcript)?;
         self.repository.recording(id)
     }
 
     pub fn summarize_recording(
+        &self,
+        app: &AppHandle,
+        id: &str,
+        template_id: Option<&str>,
+        target: Option<crate::cloud_summarization::SummaryTarget>,
+    ) -> AppResult<Recording> {
+        let _guard = self.processing_lock.try_lock().map_err(|_| {
+            AppError::State("another transcription or summary is already running".into())
+        })?;
+        let recording = self.summarize_recording_inner(app, id, template_id, target)?;
+        let _ = app.emit("recording-updated", &recording);
+        Ok(recording)
+    }
+
+    pub(crate) fn summarize_recording_inner(
         &self,
         app: &AppHandle,
         id: &str,
@@ -533,6 +620,9 @@ impl AppState {
             })
             .and_then(|path| {
                 self.repository.update_settings(&SettingsPatch {
+                    transcription_source: Some(
+                        crate::cloud_transcription::TranscriptionSource::Local,
+                    ),
                     whisper_model_path: Some(Some(path.to_string_lossy().into_owned())),
                     ..Default::default()
                 })?;
@@ -548,6 +638,7 @@ impl AppState {
     pub fn use_whisper_model(&self, model_id: &str) -> AppResult<AppSnapshot> {
         let path = crate::transcription::installed_model_path(&self.models_dir, model_id)?;
         self.repository.update_settings(&SettingsPatch {
+            transcription_source: Some(crate::cloud_transcription::TranscriptionSource::Local),
             whisper_model_path: Some(Some(path.to_string_lossy().into_owned())),
             ..Default::default()
         })?;
@@ -714,12 +805,8 @@ impl AppState {
     }
 }
 
-fn default_title(mode: CaptureMode, detected_app: Option<&str>) -> String {
-    let prefix = detected_app.unwrap_or(match mode {
-        CaptureMode::Online => "Online meeting",
-        CaptureMode::InPerson => "In-person meeting",
-    });
-    format!("{prefix} — {}", Local::now().format("%d %b %Y, %H:%M"))
+fn default_title() -> String {
+    format!("Recording – {}", Local::now().format("%d %b %Y, %H:%M"))
 }
 
 fn session_from_runtime(runtime: &RuntimeState) -> RecordingSession {
@@ -753,6 +840,22 @@ fn emit_session(app: &AppHandle, runtime: &RuntimeState) -> AppResult<RecordingS
     Ok(session)
 }
 
+fn ensure_recordings_can_be_deleted(
+    phase: &RecordingPhase,
+    active_id: Option<&str>,
+    ids: &[String],
+) -> AppResult<()> {
+    if !ids.is_empty()
+        && (*phase == RecordingPhase::Finalizing
+            || active_id.is_some_and(|active| ids.iter().any(|id| id == active)))
+    {
+        return Err(AppError::State(
+            "stop the recording and wait for it to finish saving before deleting it".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn ensure_recording_can_start(runtime: &RuntimeState) -> AppResult<()> {
     if runtime.update_installing {
         return Err(AppError::State(
@@ -773,6 +876,18 @@ fn ensure_recording_can_start(runtime: &RuntimeState) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deletion_protects_live_capture_but_allows_interrupted_recordings() {
+        let ids = vec!["one".into()];
+        for phase in [RecordingPhase::Recording, RecordingPhase::Paused] {
+            assert!(ensure_recordings_can_be_deleted(&phase, Some("one"), &ids).is_err());
+            assert!(ensure_recordings_can_be_deleted(&phase, Some("other"), &ids).is_ok());
+        }
+        assert!(ensure_recordings_can_be_deleted(&RecordingPhase::Finalizing, None, &ids).is_err());
+        assert!(ensure_recordings_can_be_deleted(&RecordingPhase::Idle, None, &ids).is_ok());
+        assert!(ensure_recordings_can_be_deleted(&RecordingPhase::Failed, None, &ids).is_ok());
+    }
 
     #[test]
     fn update_install_lock_blocks_new_recordings() {

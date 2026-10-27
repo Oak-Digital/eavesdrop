@@ -144,6 +144,19 @@ pub fn remove_key(provider: CloudProvider) -> AppResult<()> {
     }
 }
 
+pub(crate) fn load_key(provider: CloudProvider) -> AppResult<String> {
+    let key = entry(provider)?
+        .get_password()
+        .map_err(|error| match error {
+            keyring::Error::NoEntry => AppError::State(format!(
+                "add your {} API key in Settings first",
+                provider.name()
+            )),
+            _ => AppError::Crypto("could not read the cloud API key".into()),
+        })?;
+    Ok(validate_key(&key)?.to_owned())
+}
+
 pub fn summarize(
     transcript: &Transcript,
     provider: CloudProvider,
@@ -152,15 +165,7 @@ pub fn summarize(
     custom_prompt: Option<&str>,
 ) -> AppResult<Summary> {
     validate_model(model)?;
-    let key = entry(provider)?
-        .get_password()
-        .map_err(|error| match error {
-            keyring::Error::NoEntry => AppError::State(format!(
-                "add your {} API key in Settings → Summary models → Cloud",
-                provider.name()
-            )),
-            _ => AppError::Crypto("could not read the cloud API key".into()),
-        })?;
+    let key = load_key(provider)?;
     let body = request_body(transcript, provider, model, template_id, custom_prompt)?;
     let value = send_request(provider, provider.endpoint(), &key, &body)?;
     let text = response_text(provider, &value)?;
@@ -367,6 +372,8 @@ mod tests {
 
     fn transcript() -> Transcript {
         Transcript {
+            source: None,
+            model: None,
             text: "Et pilotprojekt blev foreslået. Ingen beslutning.".into(),
             language: Some("da".into()),
             created_at: "now".into(),

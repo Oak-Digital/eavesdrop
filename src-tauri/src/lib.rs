@@ -1,6 +1,8 @@
 mod audio;
+mod automatic_processing;
 mod background_process;
 mod cloud_summarization;
+mod cloud_transcription;
 mod commands;
 mod crypto;
 mod destinations;
@@ -29,6 +31,28 @@ use tauri::{
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
 pub fn run() {
+    let context = tauri::generate_context!();
+    #[cfg(target_os = "macos")]
+    let context = {
+        let mut context = context;
+        // Native NSVisualEffectView behind the webview. Opaque content surfaces
+        // mask it everywhere except the sidebar and its title-bar area.
+        if let Some(main) = context
+            .config_mut()
+            .app
+            .windows
+            .iter_mut()
+            .find(|window| window.label == "main")
+        {
+            main.transparent = true;
+            main.window_effects = Some(tauri::utils::config::WindowEffectsConfig {
+                effects: vec![tauri::window::Effect::Sidebar],
+                state: Some(tauri::window::EffectState::FollowsWindowActiveState),
+                ..Default::default()
+            });
+        }
+        context
+    };
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -41,6 +65,7 @@ pub fn run() {
         ))
         .invoke_handler(tauri::generate_handler![
             commands::get_app_snapshot,
+            commands::get_automatic_processing_status,
             commands::request_permissions,
             commands::complete_onboarding,
             commands::update_settings,
@@ -53,9 +78,7 @@ pub fn run() {
             commands::list_recordings,
             commands::rename_recording,
             commands::delete_recording,
-            commands::restore_recording,
             commands::delete_recordings,
-            commands::restore_recordings,
             commands::export_recording,
             commands::get_recording_audio,
             commands::transcribe_recording,
@@ -89,6 +112,8 @@ pub fn run() {
         ])
         .setup(|app| {
             let state = state::AppState::open(app.handle())?;
+            #[cfg(target_os = "macos")]
+            sync_library_appearance(app.handle(), state.repository.settings()?.theme)?;
             app.manage(state);
             let app_data = app.path().app_data_dir()?;
             app.manage(diagnostics::Diagnostics::open(&app_data)?);
@@ -160,7 +185,7 @@ pub fn run() {
                 let _ = window.hide();
             }
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building Eavesdrop")
         .run(|app, event| {
             #[cfg(target_os = "macos")]
@@ -171,6 +196,21 @@ pub fn run() {
             #[cfg(not(target_os = "macos"))]
             let _ = (app, event);
         });
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn sync_library_appearance(
+    app: &tauri::AppHandle,
+    theme: models::ThemePreference,
+) -> tauri::Result<()> {
+    if let Some(window) = app.get_webview_window("main") {
+        window.set_theme(match theme {
+            models::ThemePreference::Light => Some(tauri::Theme::Light),
+            models::ThemePreference::Dark => Some(tauri::Theme::Dark),
+            models::ThemePreference::System => None,
+        })?;
+    }
+    Ok(())
 }
 
 fn should_hide_quick_panel(label: &str, focused: bool) -> bool {
@@ -221,6 +261,13 @@ fn tray_image(recording: bool) -> Image<'static> {
     let height = 18usize;
     let mut rgba = vec![0u8; width * height * 4];
     let heights = [6usize, 12, 16, 12, 6];
+    #[cfg(target_os = "macos")]
+    let color = if recording {
+        [249, 115, 22, 255]
+    } else {
+        [255, 255, 255, 255]
+    };
+    #[cfg(not(target_os = "macos"))]
     let color = if recording {
         [180, 35, 24, 255]
     } else {
