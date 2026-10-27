@@ -253,6 +253,22 @@ svg {
   color: var(--muted);
   font-size: 10px;
 }
+.recorder-equalizer {
+  display: block;
+  flex-shrink: 0;
+  width: 100%;
+  height: 42px;
+  margin: -16px 0 14px;
+  overflow: hidden;
+  color: var(--accent);
+}
+.recorder-equalizer path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
 .recorder-heading {
   font-variant-numeric: tabular-nums;
 }
@@ -264,7 +280,6 @@ svg {
   --hairline-mid: #9c8aa8;
   width: 100%;
   aspect-ratio: 5 / 4;
-  cursor: ew-resize;
   touch-action: pan-y;
 }
 .recorder-stage > svg {
@@ -273,6 +288,7 @@ svg {
   height: auto;
 }
 .recorder-caption {
+  justify-content: flex-end;
   border-top: 1px solid var(--line);
   min-height: 45px;
 }

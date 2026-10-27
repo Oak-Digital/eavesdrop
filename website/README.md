@@ -54,14 +54,14 @@ Tests cover installer selection, missing platforms, malformed release responses,
 
 ### Recorder hero
 
-The hero is a custom isometric tape recorder built with the [Hairline creation skill](https://github.com/lucasmarkes/hairline/tree/main/skills/hairline-create). Moving across it scrubs the reels and transfers tape between them. Arrow keys, Home, and End also scrub; the idle tour moves forward, rewinds, and returns to rest. A Pause button stops the tour. Reduced-motion preferences disable autoplay, and Hairline's shared loop sleeps offscreen.
+The hero is a custom isometric tape recorder built with the [Hairline creation skill](https://github.com/lucasmarkes/hairline/tree/main/skills/hairline-create). Its reels rotate continuously, independently of mouse or keyboard input. A full-width hairline equalizer beneath the deck shares the same animation clock; its levels are decorative. A Pause button freezes both animations; Play resumes from the same position. Reduced-motion preferences disable autoplay, and Hairline's shared loop sleeps offscreen.
 
-- Edit `scripts/hairline/recorder.js` for geometry, interaction, and tour stops; `src/RecorderHero.tsx` owns the React lifecycle and playback control.
-- `npm run hero:build` validates the figure and generates the ESM adapter plus a standalone `scripts/hairline/hairline-recorder.html` preview. It runs automatically before development and production builds. Generated files are ignored by Git.
+- Edit `scripts/hairline/recorder.js` for geometry and rotation speed; `src/RecorderHero.tsx` owns the React lifecycle and playback control.
+- `npm run hero:build` validates the figure and generates the ESM adapter. It runs automatically before development and production builds. Generated files are ignored by Git. The build adapter excludes exactly two upstream checks that require pointer input and a pointer tour, since this hero intentionally has neither; all other checks remain enabled.
 - `scripts/hairline/vendor/` preserves the upstream kernel, bench, builder, and validator unchanged from Hairline commit `37d2e78dcb333ab30c3338e28ed4a690364ea014`, under the included MIT license. There is no runtime CDN dependency.
 - The theme uses Hairline's public CSS variables in `src/styles.css`. The illustration does not capture or play audio.
 
-For Hairline's eight-view visual check, run its `skills/hairline-create/look.mjs` from `scripts/hairline/` with `recorder.js --answer 300,175 --edge 65,175 --edge 335,175`. It produces a sheet and motion frames to inspect; the static validator alone cannot judge appearance.
+Use `npm run preview` after building to check the animation in the page. Verify continuous motion with the pointer inside and outside the drawing, pause/resume, reduced motion, and offscreen suspension. The upstream pointer-answer visual harness assumes an interactive figure and does not apply to this ambient variant.
 
 ### Page files
 
