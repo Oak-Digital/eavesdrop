@@ -139,6 +139,8 @@ function Downloads() {
                   url: release?.windows,
                 },
               ] as const
+            ).slice().sort((a, b) =>
+              Number(b.platform === detectedPlatform) - Number(a.platform === detectedPlatform)
             ).map((item) => (
               <div
                 className={`download-option${item.platform === detectedPlatform ? " recommended" : ""}`}
