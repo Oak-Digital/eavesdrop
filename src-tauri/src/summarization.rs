@@ -35,6 +35,7 @@ struct Request<'a> {
     transcript: &'a Transcript,
     model_path: &'a str,
     summary_prompt: Option<&'a str>,
+    template_id: &'a str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -185,6 +186,7 @@ pub fn summarize(
     transcript: &Transcript,
     model_path: &Path,
     summary_prompt: Option<&str>,
+    template_id: &str,
     on_progress: &mut dyn FnMut(SummarizationStage, f32),
 ) -> AppResult<Summary> {
     let engine = engine_path()?;
@@ -195,6 +197,7 @@ pub fn summarize(
         transcript,
         model_path,
         summary_prompt,
+        template_id,
     })
     .map_err(|error| AppError::Other(format!("could not build the summary request: {error}")))?;
 
@@ -290,7 +293,6 @@ mod tests {
         assert!(MODELS.iter().all(|model| model.sha256.len() == 64));
     }
 
-
     #[test]
     fn removing_a_model_updates_the_catalog() {
         let temp = tempfile::tempdir().unwrap();
@@ -332,6 +334,17 @@ mod tests {
         };
         assert_eq!(summary.suggested_title, "T");
         assert_eq!(summary.action_items, ["a"]);
+        assert_eq!(summary.markdown, None);
+        assert_eq!(summary.template_id, None);
+        let event: Event = serde_json::from_str(r##"{"type":"summary","suggestedTitle":"Pilot","overview":"","keyPoints":[],"decisions":[],"actionItems":[],"model":"local","createdAt":"now","templateId":"discussion","markdown":"# Pilot\n\n## Konklusion\nA proposal."}"##).unwrap();
+        let Event::Summary(summary) = event else {
+            panic!("expected summary")
+        };
+        assert_eq!(summary.template_id.as_deref(), Some("discussion"));
+        assert_eq!(
+            summary.markdown.as_deref(),
+            Some("# Pilot\n\n## Konklusion\nA proposal.")
+        );
 
         let event: Event = serde_json::from_str(r#"{"type":"error","message":"boom"}"#).unwrap();
         assert!(matches!(event, Event::Error { message } if message == "boom"));
@@ -347,10 +360,12 @@ mod tests {
             transcript: &transcript,
             model_path: "/models/m.gguf",
             summary_prompt: Some("Focus on customer feedback."),
+            template_id: "custom",
         })
         .unwrap();
         assert!(json.contains("\"modelPath\":\"/models/m.gguf\""));
         assert!(json.contains("\"summaryPrompt\":\"Focus on customer feedback.\""));
         assert!(json.contains("\"transcript\""));
+        assert!(json.contains("\"templateId\":\"custom\""));
     }
 }

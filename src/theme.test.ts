@@ -22,6 +22,12 @@ afterEach(() => {
 });
 
 describe("theme preference", () => {
+  it("defaults to light when no theme is saved", () => {
+    const stopSynchronizing = initializeTheme();
+    expect(document.documentElement.dataset.theme).toBe("light");
+    stopSynchronizing();
+  });
+
   it("applies and stores a chosen theme", () => {
     applyTheme("light");
 
@@ -29,12 +35,12 @@ describe("theme preference", () => {
     expect(window.localStorage.getItem("eavesdrop-theme")).toBe("light");
   });
 
-  it("restores a stored theme during startup", () => {
-    window.localStorage.setItem("eavesdrop-theme", "system");
+  it.each(["dark", "system"])("restores a saved %s preference", (theme) => {
+    window.localStorage.setItem("eavesdrop-theme", theme);
 
     const stopSynchronizing = initializeTheme();
 
-    expect(document.documentElement.dataset.theme).toBe("system");
+    expect(document.documentElement.dataset.theme).toBe(theme);
     stopSynchronizing();
   });
 

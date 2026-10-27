@@ -16,11 +16,12 @@ export function applyTheme(theme: ThemePreference) {
 }
 
 export function initializeTheme() {
+  document.documentElement.dataset.theme = "light";
   try {
     const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
     if (isThemePreference(stored)) applyTheme(stored);
   } catch {
-    // The dark CSS default is used until the persisted app settings load.
+    // The light default is used until the persisted app settings load.
   }
 
   const synchronizeWindow = (event: StorageEvent) => {

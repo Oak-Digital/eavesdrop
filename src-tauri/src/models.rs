@@ -44,13 +44,17 @@ pub struct Transcript {
     pub segments: Vec<TranscriptSegment>,
 }
 
-/// A local, model-written digest of one meeting.
+/// A model-written digest of one meeting, generated locally or by a cloud provider.
 ///
 /// `suggested_title` is offered as a rename for the recording; the user accepts
 /// it explicitly rather than having the library retitle itself.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Summary {
+    #[serde(default)]
+    pub markdown: Option<String>,
+    #[serde(default)]
+    pub template_id: Option<String>,
     pub suggested_title: String,
     pub overview: String,
     pub key_points: Vec<String>,
@@ -240,9 +244,9 @@ impl ThemePreference {
 
     pub fn from_stored(value: &str) -> Self {
         match value {
-            "light" => Self::Light,
+            "dark" => Self::Dark,
             "system" => Self::System,
-            _ => Self::Dark,
+            _ => Self::Light,
         }
     }
 }
@@ -250,6 +254,14 @@ impl ThemePreference {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
+    #[serde(default)]
+    pub summary_source: crate::cloud_summarization::SummarySource,
+    #[serde(default)]
+    pub cloud_provider: crate::cloud_summarization::CloudProvider,
+    #[serde(default = "crate::cloud_summarization::default_model")]
+    pub cloud_model: String,
+    #[serde(default = "crate::summary_templates::default_id")]
+    pub summary_template: String,
     pub onboarding_completed: bool,
     pub meeting_detection_enabled: bool,
     pub launch_at_login: bool,
@@ -266,11 +278,15 @@ impl Default for AppSettings {
             onboarding_completed: false,
             meeting_detection_enabled: true,
             launch_at_login: false,
-            theme: ThemePreference::Dark,
+            theme: ThemePreference::Light,
             microphone_id: None,
             whisper_model_path: None,
             summary_model_path: None,
             summary_prompt: None,
+            summary_template: crate::summary_templates::default_id(),
+            summary_source: Default::default(),
+            cloud_provider: Default::default(),
+            cloud_model: crate::cloud_summarization::default_model(),
         }
     }
 }
@@ -294,6 +310,10 @@ pub struct StartRecordingInput {
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsPatch {
+    pub summary_source: Option<crate::cloud_summarization::SummarySource>,
+    pub cloud_provider: Option<crate::cloud_summarization::CloudProvider>,
+    pub cloud_model: Option<String>,
+    pub summary_template: Option<String>,
     pub onboarding_completed: Option<bool>,
     pub meeting_detection_enabled: Option<bool>,
     pub launch_at_login: Option<bool>,

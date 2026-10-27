@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Request {
+    #[serde(default = "crate::summary_templates::default_id")]
+    pub template_id: String,
     pub transcript: Transcript,
     pub model_path: String,
     #[serde(default)]
@@ -38,6 +40,10 @@ pub struct Transcript {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Summary {
+    #[serde(default)]
+    pub markdown: Option<String>,
+    #[serde(default)]
+    pub template_id: Option<String>,
     pub suggested_title: String,
     pub overview: String,
     pub key_points: Vec<String>,

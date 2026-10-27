@@ -3,6 +3,9 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
   AppSettings,
+  CloudKeyStatus,
+  CloudProvider,
+  SummaryTarget,
   AppSnapshot,
   AudioLevels,
   MeetingCandidate,
@@ -20,6 +23,8 @@ import type {
   WhisperModelDownloadProgress,
   WhisperModelInfo,
 } from "./types";
+
+import { DEFAULT_SUMMARY_TEMPLATE, summaryTemplate } from "./summaryTemplates";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 
@@ -43,11 +48,15 @@ const mockSnapshot: AppSnapshot = {
     onboardingCompleted: false,
     meetingDetectionEnabled: true,
     launchAtLogin: false,
-    theme: "dark",
+    theme: "light",
     microphoneId: null,
     whisperModelPath: null,
     summaryModelPath: null,
     summaryPrompt: null,
+    summaryTemplate: DEFAULT_SUMMARY_TEMPLATE,
+    summarySource: "local",
+    cloudProvider: "openai",
+    cloudModel: "gpt-5.4-mini",
   },
   devices: [{ id: "default", name: "Default microphone", isDefault: true }],
 };
@@ -59,6 +68,7 @@ let browserInstalledSummaryModels = new Set<string>();
 let browserRecordingClock: { startedAtMs: number; pausedAtMs: number | null; pausedTotalMs: number } | null = null;
 let browserHighlights: Recording["highlights"] = [];
 let browserOakOsConnected = false;
+let browserCloudKeys = new Set<CloudProvider>();
 const browserOakOsProjects: OakOsProject[] = [
   { id: "oak-project-one", name: "Product" },
   { id: "oak-project-two", name: "Research" },
@@ -337,18 +347,29 @@ export async function selectSummaryModel(): Promise<string | null> {
   return typeof path === "string" ? path : null;
 }
 
-export async function summarizeRecording(id: string): Promise<Recording> {
-  if (isTauri()) return command<Recording>("summarize_recording", { id });
+export async function summarizeRecording(id: string, templateId?: string, target?: SummaryTarget): Promise<Recording> {
+  if (isTauri()) return command<Recording>("summarize_recording", { id, templateId, target });
+  const settings = browserSnapshot.settings;
+  const selectedTarget: SummaryTarget = target ?? (settings.summarySource === "local" ? { source: "local" } : { source: "cloud", provider: settings.cloudProvider, model: settings.cloudModel });
+  if (selectedTarget.source === "cloud" && !browserCloudKeys.has(selectedTarget.provider)) throw new Error("Add your Cloud API key in Settings first");
+  const selectedId = templateId ?? browserSnapshot.settings.summaryTemplate;
+  const template = summaryTemplate(selectedId);
+  if (!template) throw new Error(`Unknown summary template: ${selectedId}`);
   const item = browserRecordings.find((recording) => recording.id === id)!;
   item.summary = {
-    suggestedTitle: "Example local summary",
-    overview: "A short, on-device summary of the meeting.",
+    templateId: selectedId,
+    markdown: template.markdown ? (selectedId === "discussion"
+      ? "# Example local summary\n\n## 1. Planning\n\n### Conclusion\nThe team discussed the next release.\n\n### Discussion points\n- The scope needs clarification.\n\n## 2. Follow-up\n\n### Agreed actions\n- [ ] Clarify the scope. Owner and deadline not specified.\n\n### Proposed follow-up\nNone.\n\n## Unresolved matters\nThe release date remains open."
+      : "# Example local summary\n\n## Agreed actions\n- [ ] Clarify the scope. Owner and deadline not specified.\n\n## Proposed follow-up\nNone.\n\n## Open decisions\nThe release date remains open.") : null,
+    suggestedTitle: selectedTarget.source === "cloud" ? "Example Cloud summary" : "Example local summary",
+    overview: selectedTarget.source === "cloud" ? "A simulated Cloud summary of the meeting." : "A short, on-device summary of the meeting.",
     keyPoints: ["The first thing discussed."],
     decisions: ["Ship it."],
     actionItems: ["Someone follows up."],
-    model: "summary.gguf",
+    model: selectedTarget.source === "cloud" ? `Cloud · ${selectedTarget.provider === "openai" ? "OpenAI" : "Anthropic"} / ${selectedTarget.model}` : "summary.gguf",
     createdAt: new Date().toISOString(),
   };
+  if (selectedTarget.source === "cloud" && item.summary.markdown) item.summary.markdown = item.summary.markdown.replace("Example local summary", "Example Cloud summary");
   item.title = item.summary.suggestedTitle;
   return structuredClone(item);
 }
@@ -365,6 +386,7 @@ export async function installSummaryModel(modelId: string): Promise<AppSnapshot>
   if (isTauri()) return command<AppSnapshot>("install_summary_model", { modelId });
   browserInstalledSummaryModels.add(modelId);
   browserSnapshot.settings.summaryModelPath = `/models/${modelId}.gguf`;
+  browserSnapshot.settings.summarySource = "local";
   return structuredClone(browserSnapshot);
 }
 
@@ -372,6 +394,7 @@ export async function useSummaryModel(modelId: string): Promise<AppSnapshot> {
   if (isTauri()) return command<AppSnapshot>("use_summary_model", { modelId });
   if (!browserInstalledSummaryModels.has(modelId)) throw new Error("This summary model is not installed");
   browserSnapshot.settings.summaryModelPath = `/models/${modelId}.gguf`;
+  browserSnapshot.settings.summarySource = "local";
   return structuredClone(browserSnapshot);
 }
 
@@ -529,6 +552,24 @@ export function resetBrowserMock() {
   browserRecordingClock = null;
   browserHighlights = [];
   browserOakOsConnected = false;
+  browserCloudKeys.clear();
   browserSessionListeners.clear();
   browserRecordingFinalizedListeners.clear();
+}
+
+export async function getCloudKeyStatuses(): Promise<CloudKeyStatus[]> {
+  if (isTauri()) return command<CloudKeyStatus[]>("get_cloud_key_statuses");
+  return (["openai", "anthropic"] as const).map((provider) => ({ provider, keyStored: browserCloudKeys.has(provider) }));
+}
+
+export async function saveCloudApiKey(provider: CloudProvider, apiKey: string): Promise<void> {
+  if (isTauri()) return command<void>("save_cloud_api_key", { provider, apiKey });
+  // Browser preview retains only presence, never the supplied credential.
+  if (!apiKey.trim() || apiKey.length > 4096 || /[\x00-\x1f\x7f]/.test(apiKey.trim())) throw new Error("Enter a valid API key");
+  browserCloudKeys.add(provider);
+}
+
+export async function removeCloudApiKey(provider: CloudProvider): Promise<void> {
+  if (isTauri()) return command<void>("remove_cloud_api_key", { provider });
+  browserCloudKeys.delete(provider);
 }

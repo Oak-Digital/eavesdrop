@@ -134,8 +134,34 @@ impl Repository {
         ensure_column(
             &connection,
             "settings",
+            "summary_source",
+            "TEXT NOT NULL DEFAULT 'local'",
+        )?;
+        ensure_column(
+            &connection,
+            "settings",
+            "cloud_provider",
+            "TEXT NOT NULL DEFAULT 'openai'",
+        )?;
+        ensure_column(
+            &connection,
+            "settings",
+            "cloud_model",
+            "TEXT NOT NULL DEFAULT 'gpt-5.4-mini'",
+        )?;
+        ensure_column(
+            &connection,
+            "settings",
+            "summary_template",
+            "TEXT NOT NULL DEFAULT 'discussion'",
+        )?;
+        ensure_column(&connection, "summaries", "markdown", "TEXT")?;
+        ensure_column(&connection, "summaries", "template_id", "TEXT")?;
+        ensure_column(
+            &connection,
+            "settings",
             "theme",
-            "TEXT NOT NULL DEFAULT 'dark'",
+            "TEXT NOT NULL DEFAULT 'light'",
         )?;
         Ok(())
     }
@@ -146,7 +172,7 @@ impl Repository {
             .lock()
             .map_err(|_| AppError::Storage("database lock poisoned".into()))?;
         connection.query_row(
-            "SELECT onboarding_completed, meeting_detection_enabled, launch_at_login, microphone_id, whisper_model_path, summary_model_path, summary_prompt, theme FROM settings WHERE singleton = 1",
+            "SELECT onboarding_completed, meeting_detection_enabled, launch_at_login, microphone_id, whisper_model_path, summary_model_path, summary_prompt, theme, summary_template, summary_source, cloud_provider, cloud_model FROM settings WHERE singleton = 1",
             [],
             |row| Ok(AppSettings {
                 onboarding_completed: row.get::<_, i64>(0)? != 0,
@@ -156,6 +182,10 @@ impl Repository {
                 whisper_model_path: row.get(4)?,
                 summary_model_path: row.get(5)?,
                 summary_prompt: row.get(6)?,
+                summary_template: row.get(8)?,
+                summary_source: if row.get::<_, String>(9)? == "cloud" { crate::cloud_summarization::SummarySource::Cloud } else { crate::cloud_summarization::SummarySource::Local },
+                cloud_provider: if row.get::<_, String>(10)? == "anthropic" { crate::cloud_summarization::CloudProvider::Anthropic } else { crate::cloud_summarization::CloudProvider::Openai },
+                cloud_model: row.get(11)?,
                 theme: ThemePreference::from_stored(&row.get::<_, String>(7)?),
             }),
         ).map_err(Into::into)
@@ -163,7 +193,20 @@ impl Repository {
 
     pub fn update_settings(&self, patch: &SettingsPatch) -> AppResult<AppSettings> {
         let current = self.settings()?;
+        if let Some(id) = &patch.summary_template {
+            crate::summary_templates::get(id).map_err(AppError::State)?;
+        }
+        if let Some(model) = &patch.cloud_model {
+            crate::cloud_summarization::validate_model(model)?;
+        }
         let next = AppSettings {
+            summary_source: patch.summary_source.unwrap_or(current.summary_source),
+            cloud_provider: patch.cloud_provider.unwrap_or(current.cloud_provider),
+            cloud_model: patch.cloud_model.clone().unwrap_or(current.cloud_model),
+            summary_template: patch
+                .summary_template
+                .clone()
+                .unwrap_or(current.summary_template),
             onboarding_completed: patch
                 .onboarding_completed
                 .unwrap_or(current.onboarding_completed),
@@ -191,8 +234,8 @@ impl Repository {
             .lock()
             .map_err(|_| AppError::Storage("database lock poisoned".into()))?;
         connection.execute(
-            "UPDATE settings SET onboarding_completed = ?1, meeting_detection_enabled = ?2, launch_at_login = ?3, microphone_id = ?4, whisper_model_path = ?5, summary_model_path = ?6, summary_prompt = ?7, theme = ?8 WHERE singleton = 1",
-            params![next.onboarding_completed, next.meeting_detection_enabled, next.launch_at_login, next.microphone_id, next.whisper_model_path, next.summary_model_path, next.summary_prompt, next.theme.as_str()],
+            "UPDATE settings SET onboarding_completed = ?1, meeting_detection_enabled = ?2, launch_at_login = ?3, microphone_id = ?4, whisper_model_path = ?5, summary_model_path = ?6, summary_prompt = ?7, theme = ?8, summary_template = ?9, summary_source = ?10, cloud_provider = ?11, cloud_model = ?12 WHERE singleton = 1",
+            params![next.onboarding_completed, next.meeting_detection_enabled, next.launch_at_login, next.microphone_id, next.whisper_model_path, next.summary_model_path, next.summary_prompt, next.theme.as_str(), next.summary_template, next.summary_source.as_str(), next.cloud_provider.as_str(), next.cloud_model],
         )?;
         Ok(next)
     }
@@ -338,9 +381,9 @@ impl Repository {
             .map_err(|_| AppError::Storage("database lock poisoned".into()))?;
         let transaction = connection.transaction()?;
         transaction.execute(
-            "INSERT INTO summaries(recording_id, suggested_title, overview, model, created_at) VALUES(?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(recording_id) DO UPDATE SET suggested_title=excluded.suggested_title, overview=excluded.overview, model=excluded.model, created_at=excluded.created_at",
-            params![recording_id, summary.suggested_title, summary.overview, summary.model, summary.created_at],
+            "INSERT INTO summaries(recording_id, suggested_title, overview, model, created_at, markdown, template_id) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(recording_id) DO UPDATE SET suggested_title=excluded.suggested_title, overview=excluded.overview, model=excluded.model, created_at=excluded.created_at, markdown=excluded.markdown, template_id=excluded.template_id",
+            params![recording_id, summary.suggested_title, summary.overview, summary.model, summary.created_at, summary.markdown, summary.template_id],
         )?;
         transaction.execute(
             "DELETE FROM summary_points WHERE recording_id=?1",
@@ -541,10 +584,12 @@ fn transcript_for(connection: &Connection, recording_id: &str) -> AppResult<Opti
 fn summary_for(connection: &Connection, recording_id: &str) -> AppResult<Option<Summary>> {
     let summary = connection
         .query_row(
-            "SELECT suggested_title,overview,model,created_at FROM summaries WHERE recording_id=?1",
+            "SELECT suggested_title,overview,model,created_at,markdown,template_id FROM summaries WHERE recording_id=?1",
             [recording_id],
             |row| {
                 Ok(Summary {
+                    markdown: row.get(4)?,
+                    template_id: row.get(5)?,
                     suggested_title: row.get(0)?,
                     overview: row.get(1)?,
                     key_points: Vec::new(),
@@ -639,17 +684,18 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let repository = Repository::open(&temp.path().join("library.sqlite3")).unwrap();
         assert!(repository.settings().unwrap().meeting_detection_enabled);
+        assert_eq!(repository.settings().unwrap().theme, ThemePreference::Light);
         let updated = repository
             .update_settings(&SettingsPatch {
                 onboarding_completed: Some(true),
-                theme: Some(ThemePreference::Light),
+                theme: Some(ThemePreference::Dark),
                 whisper_model_path: Some(Some("model.bin".into())),
                 summary_prompt: Some(Some("Focus on open risks.".into())),
                 ..Default::default()
             })
             .unwrap();
         assert!(updated.onboarding_completed);
-        assert_eq!(updated.theme, ThemePreference::Light);
+        assert_eq!(updated.theme, ThemePreference::Dark);
         assert_eq!(updated.whisper_model_path.as_deref(), Some("model.bin"));
         assert_eq!(
             updated.summary_prompt.as_deref(),
@@ -664,7 +710,107 @@ mod tests {
             reopened.settings().unwrap().summary_prompt.as_deref(),
             Some("Focus on open risks.")
         );
-        assert_eq!(reopened.settings().unwrap().theme, ThemePreference::Light);
+        assert_eq!(reopened.settings().unwrap().theme, ThemePreference::Dark);
+    }
+
+    #[test]
+    fn cloud_settings_migrate_as_local_and_round_trip_without_keys() {
+        use crate::cloud_summarization::{CloudProvider, SummarySource};
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("library.sqlite3");
+        {
+            let repository = Repository::open(&path).unwrap();
+            repository.connection.lock().unwrap().execute_batch("ALTER TABLE settings DROP COLUMN summary_source; ALTER TABLE settings DROP COLUMN cloud_provider; ALTER TABLE settings DROP COLUMN cloud_model;").unwrap();
+        }
+        let repository = Repository::open(&path).unwrap();
+        let defaults = repository.settings().unwrap();
+        assert_eq!(defaults.summary_source, SummarySource::Local);
+        assert_eq!(defaults.cloud_provider, CloudProvider::Openai);
+        assert_eq!(defaults.cloud_model, "gpt-5.4-mini");
+        repository
+            .update_settings(&SettingsPatch {
+                summary_source: Some(SummarySource::Cloud),
+                cloud_provider: Some(CloudProvider::Anthropic),
+                cloud_model: Some("claude-test".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(
+            repository
+                .update_settings(&SettingsPatch {
+                    cloud_model: Some("bad model".into()),
+                    ..Default::default()
+                })
+                .is_err()
+        );
+        let settings = Repository::open(&path).unwrap().settings().unwrap();
+        assert_eq!(settings.summary_source, SummarySource::Cloud);
+        assert_eq!(settings.cloud_provider, CloudProvider::Anthropic);
+        assert_eq!(settings.cloud_model, "claude-test");
+        assert!(!serde_json::to_string(&settings).unwrap().contains("apiKey"));
+    }
+
+    #[test]
+    fn template_migration_preserves_custom_prompts_and_legacy_summaries() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("library.sqlite3");
+        {
+            let repository = Repository::open(&path).unwrap();
+            repository
+                .update_settings(&SettingsPatch {
+                    summary_prompt: Some(Some("My existing prompt".into())),
+                    ..Default::default()
+                })
+                .unwrap();
+            repository
+                .insert_recording(&test_recording("legacy"), "journal", &[0; 32])
+                .unwrap();
+            let connection = repository.connection.lock().unwrap();
+            connection.execute("INSERT INTO summaries(recording_id,suggested_title,overview,model,created_at) VALUES('legacy','Old title','Old overview','local','now')", []).unwrap();
+            connection.execute_batch("ALTER TABLE settings DROP COLUMN summary_template; ALTER TABLE summaries DROP COLUMN markdown; ALTER TABLE summaries DROP COLUMN template_id;").unwrap();
+        }
+        let repository = Repository::open(&path).unwrap();
+        assert_eq!(
+            repository.settings().unwrap().summary_template,
+            "discussion"
+        );
+        assert_eq!(
+            repository.settings().unwrap().summary_prompt.as_deref(),
+            Some("My existing prompt")
+        );
+        let legacy = repository.recording("legacy").unwrap().summary.unwrap();
+        assert_eq!(legacy.overview, "Old overview");
+        assert_eq!(legacy.markdown, None);
+        assert_eq!(legacy.template_id, None);
+        repository
+            .update_settings(&SettingsPatch {
+                summary_template: Some("actions".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(
+            repository
+                .update_settings(&SettingsPatch {
+                    summary_template: Some("missing".into()),
+                    ..Default::default()
+                })
+                .is_err()
+        );
+        let markdown = Summary {
+            markdown: Some("# Pilot\n\n## Konklusion\nA proposal.\n\n- [ ] Follow up".into()),
+            template_id: Some("discussion".into()),
+            ..legacy.clone()
+        };
+        repository.save_summary("legacy", &markdown).unwrap();
+        let reopened = Repository::open(&path).unwrap();
+        assert_eq!(reopened.settings().unwrap().summary_template, "actions");
+        assert_eq!(
+            reopened.recording("legacy").unwrap().summary,
+            Some(markdown)
+        );
+        // Switching back to a structured template must clear the old Markdown.
+        reopened.save_summary("legacy", &legacy).unwrap();
+        assert_eq!(reopened.recording("legacy").unwrap().summary, Some(legacy));
     }
 
     #[test]
@@ -727,9 +873,14 @@ mod tests {
             .insert_recording(&test_recording("one"), "journal", &[0; 32])
             .unwrap();
         let summary = Summary {
+            markdown: None,
+            template_id: None,
             suggested_title: "Nordic pricing tiers".into(),
             overview: "The team kept three tiers and set a March launch.".into(),
-            key_points: vec!["Tier three sits too close to tier two".into(), "Support load is the risk".into()],
+            key_points: vec![
+                "Tier three sits too close to tier two".into(),
+                "Support load is the risk".into(),
+            ],
             decisions: vec!["Launch in March".into()],
             action_items: vec!["Mette rewrites the pricing page".into()],
             model: "qwen2.5-1.5b-instruct-q4_k_m.gguf".into(),
@@ -738,9 +889,15 @@ mod tests {
 
         repository.save_summary("one", &summary).unwrap();
 
-        assert_eq!(repository.recording("one").unwrap().summary, Some(summary.clone()));
+        assert_eq!(
+            repository.recording("one").unwrap().summary,
+            Some(summary.clone())
+        );
         // Re-summarizing replaces the previous points rather than appending.
-        let shorter = Summary { key_points: vec!["Only one point now".into()], ..summary };
+        let shorter = Summary {
+            key_points: vec!["Only one point now".into()],
+            ..summary
+        };
         repository.save_summary("one", &shorter).unwrap();
         assert_eq!(repository.recording("one").unwrap().summary, Some(shorter));
     }

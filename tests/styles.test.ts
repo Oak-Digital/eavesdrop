@@ -3,8 +3,9 @@ import { describe, expect, it } from "vitest";
 
 const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
 
-function token(name: string) {
-  const value = styles.match(new RegExp(`--${name}:\\s*(#[0-9a-f]{6})`, "i"))?.[1];
+function token(name: string, theme: "dark" | "light") {
+  const palette = theme === "light" ? styles.split(':root[data-theme="light"]')[1].split("}")[0] : styles.split("}")[0];
+  const value = palette.match(new RegExp(`--${name}:\\s*(#[0-9a-f]{6})`, "i"))?.[1];
   if (!value) throw new Error(`Missing CSS token --${name}`);
   return value;
 }
@@ -22,12 +23,19 @@ function contrast(foreground: string, background: string) {
 }
 
 describe("text color tokens", () => {
-  it("keeps tertiary text readable on every dark surface", () => {
-    const tertiary = token("text-tertiary");
-    const backgrounds = ["bg-canvas", "bg-base", "bg-surface", "bg-elevated", "bg-muted"];
+  it.each(["dark", "light"] as const)("keeps supporting text readable on %s surfaces", (theme) => {
+    const backgrounds = ["bg-canvas", "bg-base", "bg-surface", "bg-elevated", "bg-muted", "bg-hover", "bg-selected"];
 
-    backgrounds.forEach((background) => {
-      expect(contrast(tertiary, token(background)), background).toBeGreaterThanOrEqual(4.5);
+    ["text-primary", "text-secondary", "text-tertiary"].forEach((foreground) => {
+      backgrounds.forEach((background) => {
+        expect(contrast(token(foreground, theme), token(background, theme)), `${foreground} on ${background}`).toBeGreaterThanOrEqual(4.5);
+      });
+    });
+  });
+
+  it.each(["dark", "light"] as const)("keeps action labels readable in %s mode", (theme) => {
+    [["accent-fg", "accent"], ["accent-fg", "accent-hover"], ["danger-fg", "danger"]].forEach(([foreground, background]) => {
+      expect(contrast(token(foreground, theme), token(background, theme)), `${foreground} on ${background}`).toBeGreaterThanOrEqual(4.5);
     });
   });
 });

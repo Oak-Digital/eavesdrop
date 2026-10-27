@@ -183,14 +183,20 @@ pub async fn transcribe_recording(app: AppHandle, id: String) -> AppResult<Recor
     tauri::async_runtime::spawn_blocking(move || {
         app.state::<AppState>().transcribe_recording(&app, &id)
     })
-        .await
-        .map_err(|error| AppError::Other(format!("transcription task failed: {error}")))?
+    .await
+    .map_err(|error| AppError::Other(format!("transcription task failed: {error}")))?
 }
 
 #[tauri::command]
-pub async fn summarize_recording(app: AppHandle, id: String) -> AppResult<Recording> {
+pub async fn summarize_recording(
+    app: AppHandle,
+    id: String,
+    template_id: Option<String>,
+    target: Option<crate::cloud_summarization::SummaryTarget>,
+) -> AppResult<Recording> {
     tauri::async_runtime::spawn_blocking(move || {
-        app.state::<AppState>().summarize_recording(&app, &id)
+        app.state::<AppState>()
+            .summarize_recording(&app, &id, template_id.as_deref(), target)
     })
     .await
     .map_err(|error| AppError::Other(format!("summary task failed: {error}")))?
@@ -209,7 +215,8 @@ pub fn get_model_download_status(state: State<'_, AppState>) -> Option<ModelDown
 #[tauri::command]
 pub async fn install_summary_model(app: AppHandle, model_id: String) -> AppResult<AppSnapshot> {
     tauri::async_runtime::spawn_blocking(move || {
-        app.state::<AppState>().install_summary_model(&app, &model_id)
+        app.state::<AppState>()
+            .install_summary_model(&app, &model_id)
     })
     .await
     .map_err(|error| AppError::Other(format!("model installation task failed: {error}")))?
@@ -224,10 +231,7 @@ pub fn remove_summary_model(
 }
 
 #[tauri::command]
-pub fn use_summary_model(
-    state: State<'_, AppState>,
-    model_id: String,
-) -> AppResult<AppSnapshot> {
+pub fn use_summary_model(state: State<'_, AppState>, model_id: String) -> AppResult<AppSnapshot> {
     state.use_summary_model(&model_id)
 }
 
@@ -255,10 +259,7 @@ pub fn remove_whisper_model(
 }
 
 #[tauri::command]
-pub fn use_whisper_model(
-    state: State<'_, AppState>,
-    model_id: String,
-) -> AppResult<AppSnapshot> {
+pub fn use_whisper_model(state: State<'_, AppState>, model_id: String) -> AppResult<AppSnapshot> {
     state.use_whisper_model(&model_id)
 }
 
@@ -399,4 +400,31 @@ mod tests {
         assert_eq!(normalized_quick_panel_height(900.0), 520.0);
         assert_eq!(normalized_quick_panel_height(f64::NAN), 330.0);
     }
+}
+
+#[tauri::command]
+pub async fn get_cloud_key_statuses() -> AppResult<Vec<crate::cloud_summarization::CloudKeyStatus>>
+{
+    tauri::async_runtime::spawn_blocking(crate::cloud_summarization::key_statuses)
+        .await
+        .map_err(|_| AppError::Other("could not check cloud API keys".into()))?
+}
+#[tauri::command]
+pub async fn save_cloud_api_key(
+    provider: crate::cloud_summarization::CloudProvider,
+    api_key: String,
+) -> AppResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::cloud_summarization::save_key(provider, &api_key)
+    })
+    .await
+    .map_err(|_| AppError::Other("could not save cloud API key".into()))?
+}
+#[tauri::command]
+pub async fn remove_cloud_api_key(
+    provider: crate::cloud_summarization::CloudProvider,
+) -> AppResult<()> {
+    tauri::async_runtime::spawn_blocking(move || crate::cloud_summarization::remove_key(provider))
+        .await
+        .map_err(|_| AppError::Other("could not remove cloud API key".into()))?
 }

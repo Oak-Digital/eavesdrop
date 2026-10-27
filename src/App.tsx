@@ -18,15 +18,20 @@ import {
   StopIcon,
   TrashIcon,
 } from "./icons";
-import type { AppSnapshot, CaptureMode, ModelDownloadStatus, OakOsProject, Recording, SummarizationStage, SummaryModelInfo, TranscriptionStage, WhisperModelInfo } from "./types";
+import type { CloudKeyStatus, CloudProvider, SummarySource, AppSnapshot, CaptureMode, ModelDownloadStatus, OakOsProject, Recording, SummarizationStage, SummaryModelInfo, TranscriptionStage, WhisperModelInfo } from "./types";
 import { libraryRecordingAction } from "./recordingAction";
 import { applyTheme } from "./theme";
 import { useAppState } from "./useAppState";
 import { useUpdater } from "./useUpdater";
+import { Select } from "./Select";
+import Markdown from "react-markdown";
+import { DEFAULT_SUMMARY_TEMPLATE, SUMMARY_TEMPLATE_OPTIONS, summaryTemplate } from "./summaryTemplates";
+import { SummaryTemplateSettings } from "./SummaryTemplateSettings";
+import { CloudModelSettings } from "./CloudModelSettings";
+import { SUMMARY_SOURCE_OPTIONS, providerName } from "./cloudModels";
 
 type LibraryPage = "recordings" | "deleted" | "integrations" | "settings";
 const isMac = /Macintosh|Mac OS X/.test(navigator.userAgent);
-const DEFAULT_SUMMARY_PROMPT = "Summarize the meeting clearly and concisely. Focus on the topics discussed, decisions reached, and tasks assigned, including who owns them.";
 
 function beginWindowDrag(event: React.MouseEvent<HTMLElement>) {
   if (event.button !== 0 || !("__TAURI_INTERNALS__" in window)) return;
@@ -387,7 +392,7 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
           {models.download && <ModelDownloadProgressCard models={models} />}
           {activity && <ActivityProgressCard activity={activity} />}
           <button className={page === "settings" ? "active" : ""} onClick={() => { setPage("settings"); setSelected(null); }}><SettingsIcon /> Settings</button>
-          <div className="privacy-line">Audio stays on this computer</div>
+          <div className="privacy-line">Recordings stored on this computer</div>
         </div>
       </aside>
 
@@ -401,6 +406,12 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
             deleted={page === "deleted"}
             whisperModelPath={app.snapshot.settings.whisperModelPath}
             summaryModelPath={app.snapshot.settings.summaryModelPath}
+            defaultSummaryTemplate={app.snapshot.settings.summaryTemplate}
+            defaultSummarySource={app.snapshot.settings.summarySource}
+            cloudProvider={app.snapshot.settings.cloudProvider}
+            cloudModel={app.snapshot.settings.cloudModel}
+            cloudKeyStored={models.cloudKeys.some((key) => key.provider === app.snapshot?.settings.cloudProvider && key.keyStored)}
+            onOpenSummarySettings={() => { setSelected(null); setPage("settings"); }}
             onOpenIntegrations={() => { setSelected(null); setPage("integrations"); }}
             activity={activity}
             onChooseWhisperModel={async () => {
@@ -409,7 +420,7 @@ function LibraryApp({ app, updater }: { app: AppController; updater: AppUpdater 
             }}
             onChooseSummaryModel={async () => {
               const path = await api.selectSummaryModel();
-              if (path) await app.updateSettings({ summaryModelPath: path });
+              if (path) await app.updateSettings({ summaryModelPath: path, summarySource: "local" });
             }}
             onBack={() => setSelected(null)}
             onJobStart={beginActivity}
@@ -472,6 +483,13 @@ export type ActivityState = { kind: ActivityKind; recordingId: string; title: st
 function useModelManager(app: AppController) {
   const [whisperModels, setWhisperModels] = useState<WhisperModelInfo[]>([]);
   const [summaryModels, setSummaryModels] = useState<SummaryModelInfo[]>([]);
+  const [cloudKeys, setCloudKeys] = useState<CloudKeyStatus[]>([]);
+  const [cloudKeyError, setCloudKeyError] = useState<string | null>(null);
+  const reloadCloudKeys = async () => {
+    try { setCloudKeys(await api.getCloudKeyStatuses()); setCloudKeyError(null); }
+    catch (cause) { setCloudKeys([]); setCloudKeyError(cause instanceof Error ? cause.message : String(cause)); }
+  };
+  useEffect(() => { void reloadCloudKeys(); }, []);
   const [download, setDownload] = useState<ModelDownloadStatus | null>(null);
 
   const reload = async () => {
@@ -515,6 +533,9 @@ function useModelManager(app: AppController) {
   return {
     whisperModels,
     summaryModels,
+    cloudKeys,
+    cloudKeyError,
+    reloadCloudKeys,
     download,
     installWhisper: async (modelId: string) => {
       setDownload({ kind: "whisper", modelId, downloadedBytes: 0, totalBytes: 0, active: true });
@@ -601,7 +622,7 @@ function ActivityProgressCard({ activity }: { activity: ActivityState }) {
 
 function RecordingList({ items, loading, deleted, selectionMode, selectedIds, onSelect, onToggleSelection }: { items: Recording[]; loading: boolean; deleted: boolean; selectionMode: boolean; selectedIds: Set<string>; onSelect: (item: Recording) => void; onToggleSelection: (id: string) => void }) {
   if (loading) return <div className="empty-state">Loading recordings…</div>;
-  if (items.length === 0) return <div className="empty-state"><RecordingsIcon /><strong>{deleted ? "Nothing recently deleted" : "No recordings yet"}</strong><p>{deleted ? "Deleted recordings will appear here for seven days." : "Start from the menu bar or the button above."}</p></div>;
+  if (items.length === 0) return <div className="empty-state"><AsciiWave /><strong>{deleted ? "Nothing recently deleted" : "No recordings yet"}</strong><p>{deleted ? "Deleted recordings will appear here for seven days." : "Start from the menu bar or the button above."}</p></div>;
   return (
     <div className="recording-list">
       {items.map((item) => {
@@ -619,12 +640,20 @@ function RecordingList({ items, loading, deleted, selectionMode, selectedIds, on
   );
 }
 
-export function RecordingDetail({ recording, deleted, whisperModelPath, summaryModelPath, activity, onChooseWhisperModel, onChooseSummaryModel, onOpenIntegrations, onBack, onJobStart, onJobEnd, onChanged, onRemoved }: { recording: Recording; deleted: boolean; whisperModelPath: string | null; summaryModelPath: string | null; activity: ActivityState | null; onChooseWhisperModel: () => Promise<void>; onChooseSummaryModel: () => Promise<void>; onOpenIntegrations?: () => void; onBack: () => void; onJobStart: (item: Recording, kind: ActivityKind, label: string) => boolean; onJobEnd: (id: string, kind: ActivityKind) => void; onChanged: (item: Recording) => void; onRemoved: () => void }) {
+export function RecordingDetail({ recording, deleted, whisperModelPath, summaryModelPath, defaultSummaryTemplate = DEFAULT_SUMMARY_TEMPLATE, defaultSummarySource = "local", cloudProvider = "openai", cloudModel = "gpt-5.4-mini", cloudKeyStored = false, onOpenSummarySettings, activity, onChooseWhisperModel, onChooseSummaryModel, onOpenIntegrations, onBack, onJobStart, onJobEnd, onChanged, onRemoved }: { recording: Recording; deleted: boolean; whisperModelPath: string | null; summaryModelPath: string | null; defaultSummaryTemplate?: string; defaultSummarySource?: SummarySource; cloudProvider?: CloudProvider; cloudModel?: string; cloudKeyStored?: boolean; onOpenSummarySettings?: () => void; activity: ActivityState | null; onChooseWhisperModel: () => Promise<void>; onChooseSummaryModel: () => Promise<void>; onOpenIntegrations?: () => void; onBack: () => void; onJobStart: (item: Recording, kind: ActivityKind, label: string) => boolean; onJobEnd: (id: string, kind: ActivityKind) => void; onChanged: (item: Recording) => void; onRemoved: () => void }) {
   const [title, setTitle] = useState(recording.title);
   const [busy, setBusy] = useState(false);
   const [titleError, setTitleError] = useState<string | null>(null);
   const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
   const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [summarySource, setSummarySource] = useState<SummarySource>(defaultSummarySource);
+  useEffect(() => { setSummarySource(defaultSummarySource); }, [recording.id, defaultSummarySource]);
+  const summaryReady = summarySource === "local" ? !!summaryModelPath : cloudKeyStored && !!cloudModel;
+  const [selectedTemplate, setSelectedTemplate] = useState(recording.summary?.templateId ?? defaultSummaryTemplate);
+  useEffect(() => {
+    setSelectedTemplate(recording.summary?.templateId ?? defaultSummaryTemplate);
+    setSummaryError(null);
+  }, [recording.id, recording.summary?.templateId, defaultSummaryTemplate]);
   const [loadingPublishProjects, setLoadingPublishProjects] = useState(false);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [publishProjects, setPublishProjects] = useState<OakOsProject[]>([]);
@@ -738,12 +767,12 @@ export function RecordingDetail({ recording, deleted, whisperModelPath, summaryM
             <h2 id="publish-dialog-title">Publish to OakOS</h2>
             <p>Choose where this recording should be published.</p>
           </div>
-          <label className="field-label">Project
-            <select autoFocus value={publishProjectId} disabled={publishing || publishProjects.length === 0} onChange={(event) => { setPublishProjectId(event.target.value); setPublishDialogError(null); }}>
-              <option value="">Choose a project…</option>
-              {publishProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
-            </select>
-          </label>
+          <div className="field-label">
+            <label htmlFor="publish-project">Project</label>
+            <Select id="publish-project" label="Project" autoFocus value={publishProjectId} disabled={publishing}
+              placeholder="Choose a project…" options={publishProjects.map((project) => ({ value: project.id, label: project.name }))}
+              onValueChange={(value) => { setPublishProjectId(value); setPublishDialogError(null); }} />
+          </div>
           {publishDialogError && <p className="integration-error" role="alert">{publishDialogError}</p>}
           <div className="publish-dialog-actions">
             <button className="button secondary" disabled={publishing} onClick={() => setPublishDialogOpen(false)}>Cancel</button>
@@ -756,13 +785,13 @@ export function RecordingDetail({ recording, deleted, whisperModelPath, summaryM
 
       <section className="detail-section summary-section">
         <div className="section-heading">
-          <div><h2>Summary</h2>{recording.summary && <span>{recording.summary.model}</span>}</div>
-          {!deleted && (summaryModelPath ? (
+          <div><h2>Summary</h2>{recording.summary && <span>{[summaryTemplate(recording.summary.templateId ?? "")?.name, recording.summary.model.startsWith("Cloud · ") ? recording.summary.model : `Local · ${recording.summary.model}`].filter(Boolean).join(" · ")}</span>}</div>
+          {!deleted && (summaryReady ? (
             <button className="button secondary compact-button" disabled={processing || !recording.transcript} onClick={async () => {
-              if (!onJobStart(recording, "summary", "Loading summary model")) return;
+              if (!onJobStart(recording, "summary", summarySource === "cloud" ? `Contacting ${providerName(cloudProvider)}` : "Loading summary model")) return;
               setSummaryError(null);
               try {
-                const summarized = await api.summarizeRecording(recording.id);
+                const summarized = await api.summarizeRecording(recording.id, selectedTemplate, summarySource === "local" ? { source: "local" } : { source: "cloud", provider: cloudProvider, model: cloudModel });
                 setTitle(summarized.title);
                 onChanged(summarized);
               } catch (cause) {
@@ -770,27 +799,46 @@ export function RecordingDetail({ recording, deleted, whisperModelPath, summaryM
               } finally {
                 onJobEnd(recording.id, "summary");
               }
-            }}>{summarizing ? "Summarizing…" : recording.summary ? "Summarize again" : "Summarize"}</button>
-          ) : <button className="button secondary compact-button" onClick={onChooseSummaryModel}>Choose summary model</button>)}
+            }}>{summarizing ? "Summarizing…" : summarySource === "cloud" ? (recording.summary ? "Summarize again with Cloud" : "Summarize with Cloud") : recording.summary ? "Summarize again" : "Summarize"}</button>
+          ) : <button className="button secondary compact-button" onClick={summarySource === "cloud" ? onOpenSummarySettings : onChooseSummaryModel}>{summarySource === "cloud" ? "Set up Cloud" : "Choose summary model"}</button>)}
         </div>
+        {!deleted && <>
+          <div className="summary-template-picker">
+            <label htmlFor="recording-summary-source">Processing</label>
+            <Select id="recording-summary-source" label="Summary processing" value={summarySource} options={SUMMARY_SOURCE_OPTIONS}
+              disabled={processing} onValueChange={(value) => { setSummarySource(value as SummarySource); setSummaryError(null); }} />
+          </div>
+          <p className="summary-processing-note">{summarySource === "cloud"
+            ? `Cloud · ${providerName(cloudProvider)} / ${cloudModel}. The transcript will be sent to ${providerName(cloudProvider)} when you summarize. Audio stays local. Provider charges may apply.`
+            : `Local · ${summaryModelPath ? modelFileName(summaryModelPath) + ". " : ""}The transcript is processed on this computer.`}</p>
+        </>}
+        {!deleted && <div className="summary-template-picker">
+          <label htmlFor="recording-summary-template">Template</label>
+          <Select id="recording-summary-template" label="Summary template" value={selectedTemplate}
+            options={SUMMARY_TEMPLATE_OPTIONS} disabled={processing} onValueChange={setSelectedTemplate} />
+        </div>}
         {summaryError && <p className="player-error" role="alert">{summaryError}</p>}
         {recording.summary ? (
           <div className="summary-body">
-            <p className="summary-overview">{recording.summary.overview}</p>
+            {recording.summary.markdown ? <div className="summary-markdown">
+              <Markdown skipHtml components={{ img: () => null, a: ({ children }) => <span>{children}</span> }}>{recording.summary.markdown}</Markdown>
+            </div> : <>
+              <p className="summary-overview">{recording.summary.overview}</p>
+              <SummaryList heading="Key points" items={recording.summary.keyPoints} />
+              <SummaryList heading="Decisions" items={recording.summary.decisions} />
+              <SummaryList heading="Action items" items={recording.summary.actionItems} />
+            </>}
             {recording.summary.suggestedTitle && recording.summary.suggestedTitle !== recording.title && (
               <div className="summary-title-suggestion">
                 <div><strong>Suggested title</strong><span>{recording.summary.suggestedTitle}</span></div>
                 <button className="button secondary compact-button" disabled={busy} onClick={() => useSuggestedTitle(recording.summary!.suggestedTitle)}>Use this title</button>
               </div>
             )}
-            <SummaryList heading="Key points" items={recording.summary.keyPoints} />
-            <SummaryList heading="Decisions" items={recording.summary.decisions} />
-            <SummaryList heading="Action items" items={recording.summary.actionItems} />
           </div>
-        ) : <p className="section-empty">{!summaryModelPath
-          ? "Install a local summary model to have meetings summarized on this computer."
+        ) : <p className="section-empty">{!summaryReady
+          ? (summarySource === "cloud" ? "Add an API key in Settings → Summary models → Cloud to use this provider." : "Install a local summary model to have meetings summarized on this computer.")
           : recording.transcript
-            ? "Summarize this meeting on-device, and get a title that says what it was about."
+            ? "Summarize this meeting with the selected model and template."
             : "Transcribe this recording first — the summary is written from the transcript."}</p>}
       </section>
 
@@ -990,8 +1038,6 @@ function SettingsPage({ app, updater, models }: { app: AppController; updater: A
   const snapshot = app.snapshot!;
   const [selectedWhisperModel, setSelectedWhisperModel] = useState("base");
   const [selectedSummaryModel, setSelectedSummaryModel] = useState("qwen2.5-1.5b");
-  const [summaryPrompt, setSummaryPrompt] = useState(snapshot.settings.summaryPrompt ?? DEFAULT_SUMMARY_PROMPT);
-  const [savingSummaryPrompt, setSavingSummaryPrompt] = useState(false);
   const recordingActive = ["starting", "recording", "paused", "finalizing"].includes(snapshot.session.phase);
   const update = updater.state;
   const updateDescription = update.phase === "available"
@@ -1011,9 +1057,6 @@ function SettingsPage({ app, updater, models }: { app: AppController; updater: A
     const active = models.summaryModels.find((model) => modelPathContainsId(snapshot.settings.summaryModelPath, model.id));
     if (active) setSelectedSummaryModel(active.id);
   }, [models.summaryModels, snapshot.settings.summaryModelPath]);
-  useEffect(() => {
-    setSummaryPrompt(snapshot.settings.summaryPrompt ?? DEFAULT_SUMMARY_PROMPT);
-  }, [snapshot.settings.summaryPrompt]);
   const selectedModel = models.whisperModels.find((model) => model.id === selectedWhisperModel);
   const selectedSummary = models.summaryModels.find((model) => model.id === selectedSummaryModel);
   const percentageOf = (progress: ModelDownloadStatus | null) => progress?.totalBytes
@@ -1025,27 +1068,21 @@ function SettingsPage({ app, updater, models }: { app: AppController; updater: A
   const summaryModelPercentage = percentageOf(installingSummaryModel ? models.download : null);
   const modelBusy = models.download !== null;
   const whisperInUse = selectedModel ? modelPathContainsId(snapshot.settings.whisperModelPath, selectedModel.id) : false;
-  const summaryInUse = selectedSummary ? modelPathContainsId(snapshot.settings.summaryModelPath, selectedSummary.id) : false;
-  const normalizedSummaryPrompt = summaryPrompt.trim();
-  const storedSummaryPrompt = snapshot.settings.summaryPrompt ?? DEFAULT_SUMMARY_PROMPT;
-  const summaryPromptChanged = normalizedSummaryPrompt !== storedSummaryPrompt;
-  const saveSummaryPrompt = async (prompt: string) => {
-    const normalized = prompt.trim();
-    if (!normalized) return;
-    setSavingSummaryPrompt(true);
-    await app.updateSettings({ summaryPrompt: normalized });
-    setSavingSummaryPrompt(false);
-  };
+  const summaryInUse = selectedSummary && snapshot.settings.summarySource === "local" ? modelPathContainsId(snapshot.settings.summaryModelPath, selectedSummary.id) : false;
   return (
     <div className="settings-page">
       <header className="content-header"><div><h1>Settings</h1><p>Recording sources and app behavior.</p></div></header>
       <section className="settings-section">
         <h2>Appearance</h2>
-        <label className="field-label">Theme<select value={snapshot.settings.theme} onChange={(event) => app.updateSettings({ theme: event.target.value as AppSnapshot["settings"]["theme"] })}><option value="light">Light</option><option value="dark">Dark</option><option value="system">System</option></select></label>
+        <div className="field-label"><label htmlFor="theme">Theme</label><Select id="theme" label="Theme" value={snapshot.settings.theme}
+          onValueChange={(value) => app.updateSettings({ theme: value as AppSnapshot["settings"]["theme"] })}
+          options={[{ value: "light", label: "Light" }, { value: "dark", label: "Dark" }, { value: "system", label: "System" }]} /></div>
       </section>
       <section className="settings-section">
         <h2>Recording</h2>
-        <label className="field-label">Microphone<select value={snapshot.settings.microphoneId ?? ""} onChange={(event) => app.updateSettings({ microphoneId: event.target.value || null })}><option value="">System default</option>{snapshot.devices.map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}</select></label>
+        <div className="field-label"><label htmlFor="microphone">Microphone</label><Select id="microphone" label="Microphone" value={snapshot.settings.microphoneId ?? ""}
+          onValueChange={(value) => app.updateSettings({ microphoneId: value || null })}
+          options={[{ value: "", label: "System default" }, ...snapshot.devices.map((device) => ({ value: device.id, label: device.name }))]} /></div>
         <SettingToggle label="Meeting detection" description="Prompt for Zoom, Teams, and Google Meet calls." checked={snapshot.settings.meetingDetectionEnabled} onChange={(meetingDetectionEnabled) => app.updateSettings({ meetingDetectionEnabled })} />
       </section>
       <section className="settings-section">
@@ -1053,9 +1090,8 @@ function SettingsPage({ app, updater, models }: { app: AppController; updater: A
         <div className="model-setting">
           <div><strong>Open-source Whisper</strong><p>{snapshot.settings.whisperModelPath ? `Using ${modelFileName(snapshot.settings.whisperModelPath)}` : "Install a model once, then transcribe without sending audio anywhere."}</p></div>
           <div className="model-install-controls">
-            <select value={selectedWhisperModel} onChange={(event) => setSelectedWhisperModel(event.target.value)} aria-label="Whisper model">
-              {models.whisperModels.map((model) => <option key={model.id} value={model.id}>{model.name} · {formatSize(model.sizeBytes)}{model.installed ? " · Installed" : ""}</option>)}
-            </select>
+            <Select label="Whisper model" value={selectedWhisperModel} onValueChange={setSelectedWhisperModel} placeholder="Choose a model…"
+              options={models.whisperModels.map((model) => ({ value: model.id, label: model.name, description: `${formatSize(model.sizeBytes)}${model.installed ? " · Installed" : ""}` }))} />
             <button className="button primary" disabled={!selectedModel || modelBusy || whisperInUse} onClick={() => selectedModel?.installed ? models.useWhisper(selectedWhisperModel) : models.installWhisper(selectedWhisperModel)}>{installingModel ? `${modelPercentage}%` : whisperInUse ? "In use" : selectedModel?.installed ? "Use model" : "Install"}</button>
             {selectedModel?.installed && <button className="button model-delete" disabled={modelBusy} onClick={() => {
               if (window.confirm(`Delete ${selectedModel.name} from this device?`)) void models.removeWhisper(selectedWhisperModel);
@@ -1070,43 +1106,33 @@ function SettingsPage({ app, updater, models }: { app: AppController; updater: A
         </div>
       </section>
       <section className="settings-section">
-        <h2>Local summaries</h2>
-        <div className="model-setting">
+        <h2>Summary models</h2>
+        <div className="summary-default-setting">
+          <label htmlFor="default-summary-source">Default processing</label>
+          <Select id="default-summary-source" label="Default summary processing" value={snapshot.settings.summarySource} options={SUMMARY_SOURCE_OPTIONS}
+            onValueChange={(value) => void app.updateSettings({ summarySource: value as SummarySource })} />
+        </div>
+        <div className="model-setting summary-model-group" role="group" aria-label="Local">
+          <div><strong>Local</strong><p>Download a model and run it on this computer. No transcript is sent to an API provider.</p></div>
           <div><strong>Open-weight language model</strong><p>{snapshot.settings.summaryModelPath ? `Using ${modelFileName(snapshot.settings.summaryModelPath)}` : "Summaries and suggested titles are written on this computer, from the transcript."}</p></div>
           <div className="model-install-controls">
-            <select value={selectedSummaryModel} onChange={(event) => setSelectedSummaryModel(event.target.value)} aria-label="Summary model">
-              {models.summaryModels.map((model) => <option key={model.id} value={model.id}>{model.name} · {formatSize(model.sizeBytes)}{model.installed ? " · Installed" : ""}</option>)}
-            </select>
+            <Select label="Summary model" value={selectedSummaryModel} onValueChange={setSelectedSummaryModel} placeholder="Choose a model…"
+              options={models.summaryModels.map((model) => ({ value: model.id, label: model.name, description: `${formatSize(model.sizeBytes)}${model.installed ? " · Installed" : ""}` }))} />
             <button className="button primary" disabled={!selectedSummary || modelBusy || summaryInUse} onClick={() => selectedSummary?.installed ? models.useSummary(selectedSummaryModel) : models.installSummary(selectedSummaryModel)}>{installingSummaryModel ? `${summaryModelPercentage}%` : summaryInUse ? "In use" : selectedSummary?.installed ? "Use model" : "Install"}</button>
             {selectedSummary?.installed && <button className="button model-delete" disabled={modelBusy} onClick={() => {
               if (window.confirm(`Delete ${selectedSummary.name} from this device?`)) void models.removeSummary(selectedSummaryModel);
             }}>Delete</button>}
             <button className="button secondary" disabled={modelBusy} onClick={async () => {
               const path = await api.selectSummaryModel();
-              if (path) await app.updateSettings({ summaryModelPath: path });
+              if (path) await app.updateSettings({ summaryModelPath: path, summarySource: "local" });
             }}>Choose existing…</button>
           </div>
           {selectedSummary && <p className="model-description">{selectedSummary.description}</p>}
           {installingSummaryModel && <progress className="update-progress" max={100} value={summaryModelPercentage} aria-label="Summary model download progress" />}
         </div>
-        <div className="summary-prompt-setting">
-          <label htmlFor="summary-prompt">Summary prompt</label>
-          <p>Choose what the summary should emphasize and how it should be written. The title, overview, key points, decisions, and action items sections are kept so Eavesdrop can display the result.</p>
-          <textarea
-            id="summary-prompt"
-            value={summaryPrompt}
-            maxLength={6000}
-            rows={6}
-            onChange={(event) => setSummaryPrompt(event.target.value)}
-          />
-          <div className="summary-prompt-actions">
-            <button className="button secondary" disabled={savingSummaryPrompt || (normalizedSummaryPrompt === DEFAULT_SUMMARY_PROMPT && storedSummaryPrompt === DEFAULT_SUMMARY_PROMPT)} onClick={() => {
-              setSummaryPrompt(DEFAULT_SUMMARY_PROMPT);
-              void saveSummaryPrompt(DEFAULT_SUMMARY_PROMPT);
-            }}>Use default</button>
-            <button className="button primary" disabled={savingSummaryPrompt || !normalizedSummaryPrompt || !summaryPromptChanged} onClick={() => void saveSummaryPrompt(summaryPrompt)}>{savingSummaryPrompt ? "Saving…" : "Save prompt"}</button>
-          </div>
-        </div>
+        <CloudModelSettings settings={snapshot.settings} keys={models.cloudKeys} keyError={models.cloudKeyError}
+          onSave={app.updateSettings} onKeysChanged={models.reloadCloudKeys} />
+        <SummaryTemplateSettings settings={snapshot.settings} onSave={app.updateSettings} />
       </section>
       <section className="settings-section">
         <h2>General</h2>
@@ -1185,6 +1211,21 @@ function SettingToggle({ label, description, checked, onChange }: { label: strin
 function PermissionRow({ label, state }: { label: string; state: string }) {
   const ready = state === "granted";
   return <div className="permission-row"><span>{label}</span><strong className={ready ? "permission-granted" : "permission-needed"}>{ready ? "Allowed" : state === "unavailable" ? "Unavailable" : "Needs access"}</strong></div>;
+}
+
+// A quiet, static signal motif; decorative glyphs never enter the accessibility tree.
+function AsciiWave() {
+  return <pre className="ascii-wave" aria-hidden="true">{[
+    "· · · · · · · + · · · · · · · · ·",
+    "· · · · · + · : · · · + · · · · ·",
+    "· · · + · : · | · + · : · · · · ·",
+    "· + · : · | · | · : · | · + · · ·",
+    "+ : + | + | + | + | + | + : + : +",
+    "· + · : · | · | · : · | · + · · ·",
+    "· · · + · : · | · + · : · · · · ·",
+    "· · · · · + · : · · · + · · · · ·",
+    "· · · · · · · + · · · · · · · · ·",
+  ].join("\n")}</pre>;
 }
 
 function BrandMark({ active = false }: { active?: boolean }) {

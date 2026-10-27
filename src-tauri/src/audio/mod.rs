@@ -500,8 +500,10 @@ fn capture_worker(
                 system_target = 0.0;
             }
             if !system_stall_warned {
-                let quiet_for = last_system_sample
-                    .map_or_else(|| now.duration_since(capture_started), |last| now.duration_since(last));
+                let quiet_for = last_system_sample.map_or_else(
+                    || now.duration_since(capture_started),
+                    |last| now.duration_since(last),
+                );
                 if let Some(message) =
                     system_audio_alert(mode, quiet_for, last_system_sample.is_some())
                 {
@@ -762,7 +764,9 @@ mod tests {
 
     #[test]
     fn a_brief_gap_in_computer_audio_is_not_reported() {
-        assert!(system_audio_alert(CaptureMode::Online, Duration::from_millis(400), true).is_none());
+        assert!(
+            system_audio_alert(CaptureMode::Online, Duration::from_millis(400), true).is_none()
+        );
         assert!(
             system_audio_alert(CaptureMode::Online, SYSTEM_AUDIO_STALL_AFTER, true).is_none(),
             "the threshold itself must not trip the warning"
@@ -771,7 +775,9 @@ mod tests {
 
     #[test]
     fn an_in_person_recording_never_warns_about_computer_audio() {
-        assert!(system_audio_alert(CaptureMode::InPerson, Duration::from_secs(600), false).is_none());
+        assert!(
+            system_audio_alert(CaptureMode::InPerson, Duration::from_secs(600), false).is_none()
+        );
     }
 
     #[test]

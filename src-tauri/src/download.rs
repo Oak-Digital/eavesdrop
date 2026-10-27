@@ -213,7 +213,11 @@ mod tests {
                 .matches(&path)
                 .unwrap()
         );
-        assert!(!Checksum::Sha1("0".repeat(40).as_str()).matches(&path).unwrap());
+        assert!(
+            !Checksum::Sha1("0".repeat(40).as_str())
+                .matches(&path)
+                .unwrap()
+        );
     }
 
     #[test]

@@ -421,7 +421,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn removing_a_model_updates_the_catalog() {
         let temp = tempfile::tempdir().unwrap();

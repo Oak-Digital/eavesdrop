@@ -35,6 +35,8 @@ export interface Transcript {
 }
 
 export interface Summary {
+  markdown?: string | null;
+  templateId?: string | null;
   suggestedTitle: string;
   overview: string;
   keyPoints: string[];
@@ -132,7 +134,16 @@ export interface PermissionState {
   systemAudio: "granted" | "denied" | "not_determined" | "unavailable";
 }
 
+export type SummarySource = "local" | "cloud";
+export type CloudProvider = "openai" | "anthropic";
+export type SummaryTarget = { source: "local" } | { source: "cloud"; provider: CloudProvider; model: string };
+export interface CloudKeyStatus { provider: CloudProvider; keyStored: boolean }
+
 export interface AppSettings {
+  summarySource: SummarySource;
+  cloudProvider: CloudProvider;
+  cloudModel: string;
+  summaryTemplate: string;
   onboardingCompleted: boolean;
   meetingDetectionEnabled: boolean;
   launchAtLogin: boolean;

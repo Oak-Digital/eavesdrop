@@ -295,11 +295,35 @@ impl AppState {
         self.repository.recording(id)
     }
 
-    pub fn summarize_recording(&self, app: &AppHandle, id: &str) -> AppResult<Recording> {
+    pub fn summarize_recording(
+        &self,
+        app: &AppHandle,
+        id: &str,
+        template_id: Option<&str>,
+        target: Option<crate::cloud_summarization::SummaryTarget>,
+    ) -> AppResult<Recording> {
         let settings = self.repository.settings()?;
-        let model_path = settings.summary_model_path.ok_or_else(|| {
-            AppError::State("install a local summary model in Settings first".into())
-        })?;
+        let template_id = template_id.unwrap_or(&settings.summary_template);
+        crate::summary_templates::get(template_id).map_err(AppError::State)?;
+        use crate::cloud_summarization::{SummarySource, SummaryTarget};
+        let target = target.unwrap_or_else(|| match settings.summary_source {
+            SummarySource::Local => SummaryTarget::Local,
+            SummarySource::Cloud => SummaryTarget::Cloud {
+                provider: settings.cloud_provider,
+                model: settings.cloud_model.clone(),
+            },
+        });
+        match &target {
+            SummaryTarget::Local if settings.summary_model_path.is_none() => {
+                return Err(AppError::State(
+                    "install a Local summary model in Settings first".into(),
+                ));
+            }
+            SummaryTarget::Cloud { model, .. } => {
+                crate::cloud_summarization::validate_model(model)?
+            }
+            _ => {}
+        }
         let recording = self.repository.recording(id)?;
         let transcript = recording.transcript.ok_or_else(|| {
             AppError::State("transcribe this recording before summarizing it".into())
@@ -310,9 +334,7 @@ impl AppState {
                 .lock()
                 .map_err(|_| AppError::State("summary lock poisoned".into()))?;
             if *active {
-                return Err(AppError::State(
-                    "another summary is already running".into(),
-                ));
+                return Err(AppError::State("another summary is already running".into()));
             }
             *active = true;
         }
@@ -326,12 +348,34 @@ impl AppState {
                 },
             );
         };
-        let result: AppResult<Summary> = crate::summarization::summarize(
-            &transcript,
-            Path::new(&model_path),
-            settings.summary_prompt.as_deref(),
-            &mut on_progress,
-        );
+        let result: AppResult<Summary> = match target {
+            SummaryTarget::Local => crate::summarization::summarize(
+                &transcript,
+                Path::new(
+                    settings
+                        .summary_model_path
+                        .as_deref()
+                        .expect("validated Local model"),
+                ),
+                settings.summary_prompt.as_deref(),
+                template_id,
+                &mut on_progress,
+            ),
+            SummaryTarget::Cloud { provider, model } => {
+                on_progress(SummarizationStage::Writing, 0.1);
+                let result = crate::cloud_summarization::summarize(
+                    &transcript,
+                    provider,
+                    &model,
+                    template_id,
+                    settings.summary_prompt.as_deref(),
+                );
+                if result.is_ok() {
+                    on_progress(SummarizationStage::Writing, 1.0);
+                }
+                result
+            }
+        };
         if let Ok(mut active) = self.summarization_active.lock() {
             *active = false;
         }
@@ -340,7 +384,8 @@ impl AppState {
         if summary.suggested_title.trim().is_empty() {
             self.repository.recording(id)
         } else {
-            self.repository.rename_recording(id, &summary.suggested_title)
+            self.repository
+                .rename_recording(id, &summary.suggested_title)
         }
     }
 
@@ -370,10 +415,8 @@ impl AppState {
         }
         self.start_model_download(app, "summary", model_id);
 
-        let result = crate::summarization::install_model(
-            &self.models_dir,
-            model_id,
-            |downloaded, total| {
+        let result =
+            crate::summarization::install_model(&self.models_dir, model_id, |downloaded, total| {
                 self.advance_model_download(app, "summary", model_id, downloaded, total);
                 let _ = app.emit(
                     "summary-model-download-progress",
@@ -383,15 +426,15 @@ impl AppState {
                         total_bytes: total,
                     },
                 );
-            },
-        )
-        .and_then(|path| {
+            })
+            .and_then(|path| {
                 self.repository.update_settings(&SettingsPatch {
                     summary_model_path: Some(Some(path.to_string_lossy().into_owned())),
+                    summary_source: Some(crate::cloud_summarization::SummarySource::Local),
                     ..Default::default()
                 })?;
-            self.snapshot(false)
-        });
+                self.snapshot(false)
+            });
         if let Ok(mut active) = self.model_download_active.lock() {
             *active = false;
         }
@@ -403,6 +446,7 @@ impl AppState {
         let path = crate::summarization::installed_model_path(&self.models_dir, model_id)?;
         self.repository.update_settings(&SettingsPatch {
             summary_model_path: Some(Some(path.to_string_lossy().into_owned())),
+            summary_source: Some(crate::cloud_summarization::SummarySource::Local),
             ..Default::default()
         })?;
         self.snapshot(false)
@@ -445,10 +489,8 @@ impl AppState {
         }
         self.start_model_download(app, "whisper", model_id);
 
-        let result = crate::transcription::install_model(
-            &self.models_dir,
-            model_id,
-            |downloaded, total| {
+        let result =
+            crate::transcription::install_model(&self.models_dir, model_id, |downloaded, total| {
                 self.advance_model_download(app, "whisper", model_id, downloaded, total);
                 let _ = app.emit(
                     "whisper-model-download-progress",
@@ -458,15 +500,14 @@ impl AppState {
                         total_bytes: total,
                     },
                 );
-            },
-        )
-        .and_then(|path| {
+            })
+            .and_then(|path| {
                 self.repository.update_settings(&SettingsPatch {
                     whisper_model_path: Some(Some(path.to_string_lossy().into_owned())),
                     ..Default::default()
                 })?;
                 self.snapshot(false)
-        });
+            });
         if let Ok(mut active) = self.model_download_active.lock() {
             *active = false;
         }
@@ -554,13 +595,7 @@ impl AppState {
         );
     }
 
-    fn finish_model_download(
-        &self,
-        app: &AppHandle,
-        kind: &str,
-        model_id: &str,
-        succeeded: bool,
-    ) {
+    fn finish_model_download(&self, app: &AppHandle, kind: &str, model_id: &str, succeeded: bool) {
         let mut status = self.model_download_status().unwrap_or(ModelDownloadStatus {
             kind: kind.into(),
             model_id: model_id.into(),

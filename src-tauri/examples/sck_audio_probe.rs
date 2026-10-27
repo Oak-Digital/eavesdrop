@@ -134,7 +134,11 @@ fn main() {
         println!(
             "t={second:2}s  buffers={b:5} (+{:4})  samples={s:8} (+{delta_samples:6}/s)  rms={rms:.5}{}",
             b - last.0,
-            if delta_samples == 0 { "   <-- no samples this second" } else { "" }
+            if delta_samples == 0 {
+                "   <-- no samples this second"
+            } else {
+                ""
+            }
         );
         last = (b, s);
     }
@@ -146,11 +150,18 @@ fn main() {
     let channels = channels_seen.load(Ordering::Relaxed);
     let e = energy.load(Ordering::Relaxed);
     println!("\n--- summary ---");
-    println!("sample buffers      : {}", buffers_seen.load(Ordering::Relaxed));
+    println!(
+        "sample buffers      : {}",
+        buffers_seen.load(Ordering::Relaxed)
+    );
     println!("audio sub-buffers   : {subs}");
     println!(
         "avg channels/buffer : {:.2}",
-        if subs > 0 { channels as f64 / subs as f64 } else { 0.0 }
+        if subs > 0 {
+            channels as f64 / subs as f64
+        } else {
+            0.0
+        }
     );
     println!("total f32 samples   : {samples}");
     println!(
@@ -164,7 +175,15 @@ fn main() {
     }
     println!(
         "overall rms         : {:.5}{}",
-        if samples > 0 { ((e as f64 / 1_000_000.0) / samples as f64).sqrt() } else { 0.0 },
-        if samples == 0 { "   <-- NO AUDIO DELIVERED" } else { "" }
+        if samples > 0 {
+            ((e as f64 / 1_000_000.0) / samples as f64).sqrt()
+        } else {
+            0.0
+        },
+        if samples == 0 {
+            "   <-- NO AUDIO DELIVERED"
+        } else {
+            ""
+        }
     );
 }

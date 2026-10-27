@@ -1,4 +1,5 @@
 mod audio;
+mod cloud_summarization;
 mod commands;
 mod crypto;
 mod destinations;
@@ -12,6 +13,10 @@ mod platform;
 mod state;
 mod storage;
 mod summarization;
+// Generation fields are consumed by the separate summarizer binary.
+#[allow(dead_code)]
+#[path = "../summary_templates.rs"]
+mod summary_templates;
 mod transcription;
 
 use tauri::{
@@ -58,6 +63,9 @@ pub fn run() {
             commands::remove_whisper_model,
             commands::use_whisper_model,
             commands::summarize_recording,
+            commands::get_cloud_key_statuses,
+            commands::save_cloud_api_key,
+            commands::remove_cloud_api_key,
             commands::list_summary_models,
             commands::install_summary_model,
             commands::remove_summary_model,
@@ -303,8 +311,9 @@ mod tests {
         assert!(backend.contains("\"summary-model-download-progress\""));
         assert!(frontend.contains("listen<SummarizationProgress>(\"summarization-progress\""));
         assert!(
-            frontend
-                .contains("listen<SummaryModelDownloadProgress>(\"summary-model-download-progress\"")
+            frontend.contains(
+                "listen<SummaryModelDownloadProgress>(\"summary-model-download-progress\""
+            )
         );
     }
 

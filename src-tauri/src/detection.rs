@@ -53,7 +53,8 @@ impl MeetingDetector {
                                 if !poll_failing {
                                     poll_failing = true;
                                     if let Some(diagnostics) = app.try_state::<Diagnostics>() {
-                                        let _ = diagnostics.event("meeting_detection_poll_panicked");
+                                        let _ =
+                                            diagnostics.event("meeting_detection_poll_panicked");
                                     }
                                 }
                                 Vec::new()
@@ -226,7 +227,12 @@ fn platform_candidates() -> Vec<MeetingCandidate> {
     let processes = content
         .applications()
         .iter()
-        .flat_map(|application| [application.application_name(), application.bundle_identifier()])
+        .flat_map(|application| {
+            [
+                application.application_name(),
+                application.bundle_identifier(),
+            ]
+        })
         .collect::<Vec<_>>()
         .join("\n");
     let windows = content

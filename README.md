@@ -13,6 +13,16 @@ npm run tauri dev
 
 The first recording asks for microphone permission. Online recording on macOS also requires Screen Recording permission. The app remains available from the menu bar or notification area after its library window is closed.
 
+## Design system
+
+The interface draws from [ascii-reveal](https://quanhoangindex.github.io/ascii-reveal/): neutral paper/ink surfaces, fine frame lines, monochrome actions, and a static ASCII signal motif. Geist is used for interface text; Geist Mono is reserved for identity, timestamps, and metadata. Both fonts are bundled locally for offline use.
+
+`src/styles.css` owns the shared color, typography, spacing, and radius tokens for the library, recorder, and onboarding. Use semantic tokens rather than literal component colors. Buttons and select triggers share the fully rounded `--radius-button` token. Light is the default appearance. Dark and system appearance remain available in Settings; existing preferences are preserved. Color is reserved for recording, warnings, errors, and permission status. All animation respects reduced-motion preferences. Dropdowns use the shared `src/Select.tsx` component, styled with these same tokens over Radix select primitives. Use its options and `onValueChange` API for new pickers; it handles keyboard navigation, typeahead, focus return, and viewport-aware popup positioning.
+
+## macOS app icon
+
+The Dock and Command-Tab icon uses a glass version of the five-bar waveform, with a frosted silver tile and translucent indigo bars. Its transparent master is `assets/icon-macos-glass.png`; regenerate the bundled `src-tauri/icons/icon.icns` on macOS with `npm run icon:mac`. The icon set includes standard and Retina representations from 16 to 1024 pixels. Rebuild and relaunch the app to see changes to the bundled icon. The flat vector mark in `assets/icon.svg` remains available for interface use.
+
 ## Local transcription
 
 Eavesdrop embeds the open-source [`whisper.cpp`](https://github.com/ggml-org/whisper.cpp) engine. Transcription happens on-device: decrypted audio is decoded and processed in memory and is never uploaded or written to a plaintext working file.
@@ -22,6 +32,26 @@ Eavesdrop embeds the open-source [`whisper.cpp`](https://github.com/ggml-org/whi
 3. Open a finished recording and select **Transcribe**. Eavesdrop saves the timestamped transcript in its local library.
 
 Larger models are generally more accurate but need more memory and take longer to run. An existing whisper.cpp-compatible `.bin` model can still be selected manually.
+
+## Local and Cloud summary models
+
+**Settings → Summary models** groups downloadable models under **Local** and API models under **Cloud**. Local is the initial default and processes transcripts on your computer. Install a bundled model or choose an existing GGUF file. Selecting a Local model makes Local the default again.
+
+For Cloud, choose OpenAI or Anthropic, pick a model (or enter a custom model ID), save your API key, then select **Use Cloud model**. Keys are stored in the operating system credential store, separately from settings and library exports. You can replace or remove each provider's key. Saving a key does not verify provider access; authentication, billing, and model access are checked on generation. Only models supported by the provider's text-generation endpoint can be used.
+
+Every recording has a **Local / Cloud** processing picker. Cloud clearly names the provider and sends the transcript text, summary instructions, and language to that provider when you explicitly generate a summary; provider charges and data policies apply. Transcription still uses Local Whisper models, and audio is not sent to summary providers. There is no automatic fallback from Local to Cloud. Failed, refused, or truncated Cloud responses leave an existing summary unchanged. OpenAI requests use `store: false`; this does not override the provider's other retention policies.
+
+Cloud integrations use the [OpenAI Responses API](https://developers.openai.com/api/reference/resources/responses/methods/create) and [Anthropic Messages API](https://platform.claude.com/docs/en/api/messages/create). The browser development preview simulates Cloud calls and key presence without retaining API keys or making provider requests; native builds perform the actual calls.
+
+## Summary templates
+
+Choose a template in a recording's **Summary** section before selecting **Summarize** or **Summarize again**. **Discussion summary** is the initial default: a detailed thematic record with conclusions, supporting discussion, agreed actions, proposed follow-up, and unresolved questions, based on the Plaud-style example. It follows the meeting's language and targets 2,000–3,000 words for a substantive hour-long meeting, adjusting to the available content.
+
+**Concise summary** keeps the short overview/key points/decisions/actions format. **Action items** focuses on commitments, owners, deadlines, and open decisions. **Custom prompt** uses the saved instructions in Settings with the structured concise layout. Existing custom prompts and older summaries are preserved.
+
+Change the default under **Settings → Summary models → Default summary template** and select **Save template**. A recording's picker overrides that choice for that generation only; saved summaries remember which template produced them. Changing a template does not rewrite a summary until you generate it again.
+
+The shared preset catalog is `src/summaryTemplates.json`, compiled into both the UI and the local summary engine. Discussion summaries retain Markdown and have larger note, output, and context budgets than concise summaries. They can take longer and use more memory; output quality still depends on the selected model. All templates also work with Cloud models. Build the sidecar before Rust app checks or packaging: `npm run summarizer:build -- aarch64-apple-darwin` (substitute the target platform).
 
 ## Verification
 

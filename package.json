@@ -1,7 +1,7 @@
 {
   "name": "eavesdrop",
   "private": true,
-  "version": "0.1.22",
+  "version": "0.1.23",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,12 +9,15 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "tauri": "tauri",
+    "icon:mac": "./scripts/build-macos-icon.sh",
     "summarizer:build": "./scripts/build-summarizer.sh",
     "bundle:mac": "tauri build --bundles app --config '{\"bundle\":{\"createUpdaterArtifacts\":false,\"macOS\":{\"signingIdentity\":\"-\"}}}' && ./scripts/sign-macos-local.sh",
     "version:set": "node scripts/set-version.mjs"
   },
   "dependencies": {
-    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.3.0",
+    "@radix-ui/react-select": "^2.4.1",
     "@tauri-apps/api": "2.11.1",
     "@tauri-apps/plugin-autostart": "2.5.1",
     "@tauri-apps/plugin-dialog": "2.7.2",
@@ -23,7 +26,8 @@
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.10.1",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "react-markdown": "^10.1.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.4",
