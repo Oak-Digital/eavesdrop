@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="robots" content="noindex" />
+    <title>Eavesdrop share image source — 1200 × 630</title>
+    <style>
+      @font-face {
+        font-family: Geist;
+        src: url("../node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2");
+        font-weight: 100 900;
+      }
+      @font-face {
+        font-family: "Geist Mono";
+        src: url("../node_modules/@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2");
+        font-weight: 100 900;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; width: 1200px; height: 630px; background: #f6f6f7; color: #141416; font-family: Geist, sans-serif; }
+      main { position: relative; width: 1200px; height: 630px; padding: 52px 60px; overflow: hidden; }
+      header { display: flex; align-items: center; gap: 14px; }
+      .brand { font-family: "Geist Mono", monospace; font-size: 29px; font-weight: 600; letter-spacing: -1.5px; }
+      .maker { display: flex; align-items: center; gap: 8px; margin-left: 8px; font-size: 18px; }
+      .maker span:first-child { color: #5f5f68; }
+      h1 { margin: 65px 0 24px; font-size: 72px; line-height: 1.03; letter-spacing: -3.8px; font-weight: 600; }
+      .description { margin: 0; color: #5f5f68; font-size: 24px; line-height: 1.5; }
+      .signal { position: absolute; right: 52px; top: 150px; margin: 0; color: #765b86; font-family: "Geist Mono", monospace; font-size: 10px; line-height: 10px; letter-spacing: 0; white-space: pre; }
+      footer { position: absolute; bottom: 44px; left: 60px; right: 60px; display: flex; justify-content: space-between; padding-top: 24px; border-top: 1px solid #dedee2; font-size: 17px; font-family: "Geist Mono", monospace; color: #5f5f68; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <svg width="31" height="35" viewBox="0 0 24 24" fill="none" stroke="#765b86" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M3 10v4m4-8v12m5-16v20m5-16v12m4-8v4" /></svg>
+        <span class="brand">eavesdrop</span>
+        <span class="maker"><span>by</span><img src="/oak-logo.svg" width="26" height="26" alt="" /><span>Oak</span></span>
+      </header>
+      <h1>Stay in the<br />conversation.</h1>
+      <p class="description">Record meetings. Remember the details.<br />Transcripts and summaries, on your device.</p>
+      <pre class="signal" aria-hidden="true"></pre>
+      <footer><span>For macOS &amp; Windows</span><span>eavesdrop.oak.dk</span></footer>
+    </main>
+    <script type="module">
+      // Same native ASCII waveform used by the landing page.
+      document.querySelector(".signal").textContent = Array.from({ length: 33 }, (_, y) =>
+        Array.from({ length: 65 }, (_, x) => {
+          const dx = (x - 32) / 32;
+          const dy = (y - 16) / 16;
+          const radius = Math.sqrt(dx * dx + dy * dy);
+          const envelope = Math.exp(-dx * dx * 4.5);
+          const wave = Math.abs(Math.sin(dx * 24) * 0.62 + Math.sin(dx * 57) * 0.22) * envelope;
+          if (Math.abs(dy) < wave) return Math.abs(dy) < wave * 0.5 ? "█" : "▒";
+          if (radius > 0.94 && radius < 1.01) return "+";
+          if (y === 16) return "─";
+          return (x + y * 3) % 9 === 0 && radius < 1 ? "·" : " ";
+        }).join(""),
+      ).join("\n");
+    </script>
+  </body>
+</html>

@@ -106,6 +106,25 @@ svg {
   padding: 0 48px;
   position: relative;
 }
+.brand-lockup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+.brand-maker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.brand-maker > span:first-child {
+  color: var(--muted);
+}
+.brand-maker img {
+  display: block;
+}
 .brand {
   display: inline-flex;
   align-items: center;
@@ -654,6 +673,9 @@ svg {
 .download-option + .download-option {
   border-left: 1px solid var(--line);
 }
+.download-option.recommended {
+  background: var(--accent-soft);
+}
 .download-option h3 {
   font-size: 21px;
 }
@@ -866,6 +888,19 @@ svg {
   }
   .brand {
     font-size: 17px;
+  }
+  .site-header .brand-lockup {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  .site-header .brand-maker {
+    margin-left: 35px;
+    font-size: 10px;
+  }
+  .site-header .brand-maker img {
+    width: 14px;
+    height: 14px;
   }
   .site-header nav {
     gap: 20px;

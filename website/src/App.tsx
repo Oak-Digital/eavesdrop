@@ -15,8 +15,26 @@ import {
   REPOSITORY,
 } from "./releases.mjs";
 import snapshot from "./release-snapshot.json";
+import { detectPlatform } from "./platform";
 
 const Demo = lazy(() => import("./Demo"));
+
+function Brand() {
+  return (
+    <div className="brand-lockup">
+      <a className="brand" href="#" aria-label="Eavesdrop home">
+        <Icon name="wave" size={25} />
+        <span>eavesdrop</span>
+      </a>
+      <a className="brand-maker" href="https://www.oak.dk/">
+        <span>by</span>
+        <img src="/oak-logo.svg" alt="" width={18} height={18} />
+        <span>Oak</span>
+      </a>
+    </div>
+  );
+}
+
 const signal = Array.from({ length: 33 }, (_, y) =>
   Array.from({ length: 65 }, (_, x) => {
     const dx = (x - 32) / 32;
@@ -56,6 +74,7 @@ class PreviewBoundary extends Component<
 }
 
 function Downloads() {
+  const [detectedPlatform] = useState(detectPlatform);
   const [release, setRelease] = useState<{
     version: string;
     mac: string | null;
@@ -135,7 +154,10 @@ function Downloads() {
                 },
               ] as const
             ).map((item) => (
-              <div className="download-option" key={item.platform}>
+              <div
+                className={`download-option${item.platform === detectedPlatform ? " recommended" : ""}`}
+                key={item.platform}
+              >
                 <Icon name={item.icon} size={28} />
                 <h3>{item.platform}</h3>
                 <p>
@@ -152,7 +174,7 @@ function Downloads() {
                   </div>
                 ) : (
                   <a
-                    className={`button ${item.platform === "macOS" ? "primary" : ""}`}
+                    className={`button ${item.platform === detectedPlatform ? "primary" : ""}`}
                     href={item.url || release.notes}
                   >
                     {item.url
@@ -215,10 +237,7 @@ export default function App() {
       </a>
       <div className="site-frame">
         <header className="site-header">
-          <a className="brand" href="#" aria-label="Eavesdrop home">
-            <Icon name="wave" size={25} />
-            <span>eavesdrop</span>
-          </a>
+          <Brand />
           <nav aria-label="Main navigation">
             <a href="#how-it-works">How it works</a>
             <a href="#privacy">Privacy</a>
@@ -449,10 +468,7 @@ export default function App() {
         </main>
         <footer className="site-footer">
           <div>
-            <a className="brand" href="#">
-              <Icon name="wave" size={23} />
-              <span>eavesdrop</span>
-            </a>
+            <Brand />
             <p>A little less typing. A little more listening.</p>
           </div>
           <div className="footer-links">
@@ -460,9 +476,6 @@ export default function App() {
               <Icon name="github" size={16} /> GitHub
             </a>
             <a href={`${REPOSITORY}/issues`}>Feedback ↗</a>
-            <a href="https://quanhoangindex.github.io/ascii-reveal/">
-              Made with ascii-reveal ↗
-            </a>
           </div>
         </footer>
       </div>

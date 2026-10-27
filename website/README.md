@@ -46,6 +46,14 @@ Tests cover installer selection, missing platforms, malformed release responses,
 
 ## Content and loading
 
+### Social sharing
+
+`index.html` includes canonical, Open Graph, and Twitter large-image card metadata in the initial HTML so crawlers do not need JavaScript. The public URL is `https://eavesdrop.oak.dk/`; update the canonical, `og:url`, and both image URLs together if the domain changes.
+
+`public/og-image.jpg` is the 1200 × 630 share image. Its editable source is `scripts/share-image.html`, using the same bundled Geist fonts, ASCII waveform, and circular Oak logo as the landing page. To refresh it, run `npm run dev`, open `/scripts/share-image.html`, let the fonts load, and capture the top-left 1200 × 630 pixels at 1× scale as JPEG. The source page is not an entry point in the production build. If the image dimensions or format change, update the image metadata in `index.html` too.
+
+### Page files
+
 - `src/App.tsx`: presentation, privacy, download lookup, and FAQs.
 - `src/Demo.tsx`: keyboard-accessible recording/summary/transcript preview using fictional example content. It does not capture or play audio.
 - `src/styles.css`: responsive paper-and-ink design, using locally bundled Geist fonts.
