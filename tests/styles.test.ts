@@ -3,10 +3,20 @@ import { describe, expect, it } from "vitest";
 
 const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
 
-function token(name: string, theme: "dark" | "light") {
-  const palette = theme === "light" ? styles.split(':root[data-theme="light"]')[1].split("}")[0] : styles.split("}")[0];
-  const value = palette.match(new RegExp(`--${name}:\\s*(#[0-9a-f]{6})`, "i"))?.[1];
+type Theme = "dark" | "light" | "system-light";
+const themes: Theme[] = ["dark", "light", "system-light"];
+
+function token(name: string, theme: Theme, seen: string[] = []): string {
+  const base = styles.split("}")[0];
+  const selector = theme === "system-light" ? ':root[data-theme="system"]' : ':root[data-theme="light"]';
+  const palette = theme === "dark" ? base : styles.split(selector)[1].split("}")[0];
+  const declaration = new RegExp(`--${name}:\\s*([^;]+);`, "i");
+  const value = (palette.match(declaration) ?? base.match(declaration))?.[1].trim();
   if (!value) throw new Error(`Missing CSS token --${name}`);
+  if (seen.includes(name)) throw new Error(`Circular CSS token --${name}`);
+  const alias = value.match(/^var\(--([\w-]+)\)$/)?.[1];
+  if (alias) return token(alias, theme, [...seen, name]);
+  if (!/^#[0-9a-f]{6}$/i.test(value)) throw new Error(`Unsupported CSS color --${name}: ${value}`);
   return value;
 }
 
@@ -23,8 +33,8 @@ function contrast(foreground: string, background: string) {
 }
 
 describe("text color tokens", () => {
-  it.each(["dark", "light"] as const)("keeps supporting text readable on %s surfaces", (theme) => {
-    const backgrounds = ["bg-canvas", "bg-base", "bg-surface", "bg-elevated", "bg-muted", "bg-hover", "bg-selected"];
+  it.each(themes)("keeps supporting text readable on %s surfaces", (theme) => {
+    const backgrounds = ["bg-canvas", "bg-base", "bg-surface", "bg-elevated", "bg-muted", "bg-hover", "bg-active", "bg-selected"];
 
     ["text-primary", "text-secondary", "text-tertiary"].forEach((foreground) => {
       backgrounds.forEach((background) => {
@@ -33,7 +43,7 @@ describe("text color tokens", () => {
     });
   });
 
-  it.each(["dark", "light"] as const)("keeps action labels readable in %s mode", (theme) => {
+  it.each(themes)("keeps action labels readable in %s mode", (theme) => {
     [["accent-fg", "accent"], ["accent-fg", "accent-hover"], ["danger-fg", "danger"]].forEach(([foreground, background]) => {
       expect(contrast(token(foreground, theme), token(background, theme)), `${foreground} on ${background}`).toBeGreaterThanOrEqual(4.5);
     });

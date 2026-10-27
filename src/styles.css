@@ -35,7 +35,7 @@
   --text-primary: #ededef;
   --button-hover: #d1d1d8;
   --text-secondary: #a3a3ac;
-  --text-tertiary: #96969f;
+  --text-tertiary: #9999a2;
   --accent: var(--text-primary);
   --accent-hover: var(--button-hover);
   --accent-fg: var(--bg-base);
@@ -78,7 +78,7 @@
   --text-primary: #141416;
   --button-hover: #36363c;
   --text-secondary: #5f5f68;
-  --text-tertiary: #65656f;
+  --text-tertiary: #62626c;
   --accent: var(--text-primary);
   --accent-hover: var(--button-hover);
   --accent-fg: var(--bg-base);
@@ -108,7 +108,7 @@
     --text-primary: #141416;
     --button-hover: #36363c;
     --text-secondary: #5f5f68;
-    --text-tertiary: #65656f;
+    --text-tertiary: #62626c;
     --accent: var(--text-primary);
     --accent-hover: var(--button-hover);
     --accent-fg: var(--bg-base);
