@@ -58,7 +58,7 @@ export function RecorderHero() {
   return (
     <div className="hero-art">
       <div className="recorder-heading mono" aria-hidden="true">
-        <span>Every word has a place.</span>
+        <span>Meeting audio</span>
         <span ref={readRef}>01:24 / 05:00</span>
       </div>
       <div

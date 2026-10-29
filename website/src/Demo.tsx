@@ -36,7 +36,7 @@ export default function Demo() {
             <span>Today · 24 min</span>
           </div>
           <div className="demo-meeting">
-            <strong>A good first conversation</strong>
+            <strong>Client introduction</strong>
             <span>Yesterday · 38 min</span>
           </div>
           <div className="demo-meeting">
@@ -112,9 +112,9 @@ export default function Demo() {
               {tab === "Summary" && (
                 <div className="summary-content">
                   <div className="summary-byline">
-                    <Icon name="file" size={14} /> Discussion summary
+                    <Icon name="file" size={14} /> Concise summary
                   </div>
-                  <h4>A simpler first five minutes.</h4>
+                  <h4>Simplifying the first recording</h4>
                   <p>
                     The team walked through the new onboarding flow. The
                     priority is to get people to their first recording with
@@ -139,7 +139,7 @@ export default function Demo() {
                   <div className="summary-byline">
                     <Icon name="mic" size={14} /> Transcribed on this device
                   </div>
-                  <h4>Back to the exact words.</h4>
+                  <h4>Transcript with timestamps</h4>
                   {[
                     [
                       "00:12",
@@ -170,7 +170,7 @@ export default function Demo() {
                   <div className="summary-byline">
                     <Icon name="wave" size={14} /> Microphone + computer audio
                   </div>
-                  <h4>The conversation, kept close.</h4>
+                  <h4>Saved meeting audio</h4>
                   <div className="audio-wave" aria-hidden="true">
                     {Array.from({ length: 72 }, (_, index) => (
                       <i
@@ -186,12 +186,12 @@ export default function Demo() {
                     <span>24:08</span>
                   </div>
                   <p>
-                    Recordings are saved to your encrypted local library. Play
-                    them back in Eavesdrop, or export an M4A file when you need
-                    to share.
+                    Listen to the recording in Eavesdrop, or export it as an
+                    M4A audio file to share. The original audio stays encrypted
+                    in the library on your computer.
                   </p>
                   <p className="recording-note">
-                    Illustrative preview · no audio is recorded or played on
+                    Example only · no audio is recorded or played on
                     this page.
                   </p>
                 </div>

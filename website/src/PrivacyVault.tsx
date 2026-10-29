@@ -44,7 +44,7 @@ export function PrivacyVault() {
         aria-label="A closed personal vault with a gently turning combination dial"
       />
       <div className="vault-caption mono">
-        <span>Your words. Under lock and key.</span>
+        <span>Audio stored encrypted on your computer.</span>
       </div>
     </div>
   );

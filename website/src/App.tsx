@@ -105,14 +105,14 @@ function Downloads() {
     >
       <div className="section-intro">
         <h2 id="download-title">
-          Make room for
+          Ready for your
           <br />
-          the conversation.
+          next meeting?
         </h2>
         <p>
-          Install Eavesdrop. Choose your microphone.
+          Download Eavesdrop for Mac or Windows.
           <br />
-          You’re ready for the next meeting.
+          Choose your microphone and start recording.
         </p>
       </div>
       <div className="download-content" aria-busy={!release}>
@@ -196,23 +196,23 @@ function Downloads() {
 const questions = [
   [
     "Which meetings can I record?",
-    "Choose microphone-only capture for in-person conversations, or mix your microphone with computer audio for online calls. Eavesdrop can detect Zoom, Microsoft Teams, and Google Meet. Always let participants know you’re recording and get any required permission.",
+    "Use your microphone for in-person meetings, or include computer audio for online calls. Eavesdrop records directly from your computer without joining as a bot. Let everyone know before you start recording.",
   ],
   [
     "Does my audio leave my computer?",
-    "Recording, playback, and Whisper transcription happen locally. Local summaries also run on your device. If you choose a cloud summary provider in the app, the transcript is sent to that provider. Exporting a recording creates a shareable file at the destination you choose.",
+    "Local processing keeps audio and text on your computer. If you choose Cloud, transcription sends audio to OpenAI, while summaries send text to OpenAI or Anthropic. Cloud processing uses your own API key, and provider charges may apply. You can also export audio to share it yourself.",
   ],
   [
     "Can I use it offline?",
-    "Yes. Once you have downloaded the transcription and summary models, local recording, transcription, and summaries can work offline. Model downloads, update checks, and optional cloud summaries need an internet connection.",
+    "Yes. Recording and playback work offline. Download the local AI models in Settings to transcribe and summarize offline too. Model downloads, update checks, and cloud processing need an internet connection.",
   ],
   [
     "What do I need to get started?",
-    "A Mac running macOS 13 or later, or a 64-bit Windows 10/11 PC. Grant microphone access when prompted. Capturing computer audio on macOS also requires Screen Recording permission. Install a local model in Settings when you’re ready to transcribe.",
+    "A Mac with macOS 13 or later, or a 64-bit Windows 10/11 PC. Allow microphone access; on macOS, computer audio also needs Screen Recording permission. For transcripts and summaries, install local AI models in Settings or connect a cloud provider with your API key.",
   ],
   [
     "What if an installation triggers a security warning?",
-    "Signing status can vary between releases. Check the release notes before installing, and only use downloads from the official Eavesdrop repository. Developer builds may use an ad-hoc signature. The repository documentation explains the macOS signing and notarization setup.",
+    "Check the notes for the version you downloaded. Some development releases may not have the verification that macOS or Windows expects. Use the official GitHub downloads linked here, and check the repository’s installation guidance before proceeding.",
   ],
 ];
 
@@ -248,35 +248,35 @@ export default function App() {
                 </h1>
               </AsciiReveal>
               <p className="hero-description">
-                Let Eavesdrop remember the details.
+                Record in-person meetings and online calls.
                 <br />
-                Record, transcribe, and turn meetings into useful notes — right
-                on your computer.
+                Turn them into transcripts, summaries, and action items
+                you can come back to.
               </p>
               <div className="hero-actions">
                 <a className="button primary" href="#download">
-                  Get Eavesdrop <Icon name="download" size={17} />
+                  Download <Icon name="download" size={17} />
                 </a>
                 <a className="text-link" href="#preview">
-                  Take a closer look <Icon name="arrow" size={17} />
+                  See an example <Icon name="arrow" size={17} />
                 </a>
               </div>
               <p className="hero-footnote">
-                <Icon name="lock" size={13} /> Local recording. On-device
-                transcription. Your library.
+                <Icon name="lock" size={13} /> Local processing by default.
+                Cloud when you choose.
               </p>
             </div>
             <RecorderHero />
           </section>
           <div className="capabilities mono">
             <span>
-              <Icon name="wave" size={16} /> Microphone + computer audio
+              <Icon name="wave" size={16} /> In-person & online meetings
             </span>
             <span>
               <Icon name="file" size={16} /> Transcripts & summaries
             </span>
             <span>
-              <Icon name="lock" size={16} /> Encrypted local library
+              <Icon name="lock" size={16} /> Audio stored encrypted
             </span>
           </div>
           <section
@@ -286,14 +286,14 @@ export default function App() {
           >
             <div className="preview-intro">
               <h2 id="preview-title">
-                From “what did we say?”
+                The conversation,
                 <br />
-                to right here.
+                and what comes next.
               </h2>
               <p>
-                The recording, the words, and the next steps.
+                Your audio, transcript, and summary together.
                 <br />
-                Together in a library that stays on your device.
+                Listen back, revisit a decision, or check the next steps.
               </p>
             </div>
             <PreviewBoundary>
@@ -313,9 +313,9 @@ export default function App() {
             </PreviewBoundary>
             <div className="preview-caption mono">
               <span>
-                Explore the tabs above. This is an illustrative product preview.
+                Switch tabs to explore this fictional meeting.
               </span>
-              <span>Built to stay out of your way.</span>
+              <span>This preview does not record or play audio.</span>
             </div>
           </section>
           <section
@@ -325,34 +325,34 @@ export default function App() {
           >
             <div className="section-intro">
               <h2 id="workflow-title">
-                Less note-taking.
+                From conversation
                 <br />
-                More being there.
+                to clear notes.
               </h2>
-              <p>From the first hello to the follow-up.</p>
+              <p>Record, transcribe, and summarize in one app.</p>
             </div>
             <div className="workflow-steps">
               {[
                 {
                   number: "01",
                   icon: "mic" as const,
-                  title: "Press record. Be present.",
-                  text: "Capture your microphone, or include computer audio for online meetings. Eavesdrop lives in your menu bar or system tray, ready when you are.",
-                  detail: "In the room. On the call.",
+                  title: "Record your meeting",
+                  text: "Capture the room through your microphone, or include computer audio for online calls. Eavesdrop is ready in your menu bar or system tray.",
+                  detail: "Saved on your computer.",
                 },
                 {
                   number: "02",
                   icon: "wave" as const,
-                  title: "Find the words again.",
-                  text: "Turn a recording into a timestamped transcript with Whisper, running on your device. Choose the local model that fits your computer.",
-                  detail: "Local audio → local transcript",
+                  title: "Turn speech into text",
+                  text: "Create a transcript you can read at your own pace. Transcribe on your computer with a local AI model, or use OpenAI in the cloud.",
+                  detail: "Local transcripts include timestamps.",
                 },
                 {
                   number: "03",
                   icon: "file" as const,
-                  title: "Leave with the next steps.",
-                  text: "Create a discussion summary, a concise recap, or action items. Use a local model for summaries, and export audio when you want to share it.",
-                  detail: "The details. The decisions. The to-dos.",
+                  title: "Create a summary",
+                  text: "Turn the transcript into a detailed summary, a quick recap, or action items. Keep the discussion and next steps together, with the recording there for context.",
+                  detail: "Automate these steps in Settings.",
                 },
               ].map((step) => (
                 <article className="workflow-step" key={step.number}>
@@ -376,32 +376,30 @@ export default function App() {
             <div className="privacy-copy">
               <Icon name="lock" size={25} />
               <h2 id="privacy-title">
-                A good listener.
-                <br />A better secret keeper.
+                Private by default.
+                <br />Cloud by choice.
               </h2>
               <p>
-                Your conversations deserve a little privacy. Eavesdrop keeps
-                recordings in an encrypted local library, with keys protected by
-                macOS Keychain or Windows Credential Manager.
+                Your recordings are saved on your computer with encrypted audio.
+                Transcripts and summaries can stay local too, so you can work
+                without uploading your conversations.
               </p>
               <ul className="privacy-list">
                 <li>
-                  <Icon name="check" size={17} /> Audio encrypted at rest with
-                  AES-256-GCM
+                  <Icon name="check" size={17} /> Audio encrypted on your computer
                 </li>
                 <li>
-                  <Icon name="check" size={17} /> On-device transcription with
-                  Whisper
+                  <Icon name="check" size={17} /> Local transcripts and summaries
                 </li>
                 <li>
-                  <Icon name="check" size={17} /> Local summaries available
-                  after model setup
+                  <Icon name="check" size={17} /> Cloud processing is off
+                  by default
                 </li>
               </ul>
               <p className="privacy-note">
-                Prefer cloud summaries? That’s your choice in the app. Your
-                transcript is only sent to the provider when you use that
-                option.
+                Choose Cloud and transcription sends audio to OpenAI; summaries
+                send text to OpenAI or Anthropic. This also applies to automatic
+                processing with Cloud selected.
               </p>
               <a
                 className="text-link"
@@ -417,7 +415,7 @@ export default function App() {
             <h2 id="faq-title">
               A few things
               <br />
-              you might be wondering.
+              to know.
             </h2>
             <div className="faq-list">
               {questions.map(([question, answer]) => (
@@ -435,7 +433,7 @@ export default function App() {
         <footer className="site-footer">
           <div>
             <Brand />
-            <p>A little less typing. A little more listening.</p>
+            <p>Less typing. More listening.</p>
           </div>
           <div className="footer-links">
             <a href="#release-notes">Release notes</a>
