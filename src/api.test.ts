@@ -151,7 +151,7 @@ describe("OakOS integration", () => {
   beforeEach(resetBrowserMock);
 
   it("connects, selects a project, and publishes a recording", async () => {
-    await connectOakOs("oakos_pat_test");
+    await connectOakOs();
     const [project] = await listOakOsProjects();
     await startRecording({ mode: "online" });
     const recording = await stopRecording();
@@ -162,7 +162,7 @@ describe("OakOS integration", () => {
   });
 
   it("removes access to projects when disconnected", async () => {
-    await connectOakOs("oakos_pat_test");
+    await connectOakOs();
 
     await disconnectOakOs();
 

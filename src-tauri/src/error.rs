@@ -15,6 +15,8 @@ pub enum AppError {
     NotFound,
     #[error("permission is required: {0}")]
     Permission(String),
+    #[error("OakOS sign-in expired or access was revoked. Reconnect OakOS in Integrations.")]
+    OakOsReauthentication,
     #[error("operation failed: {0}")]
     Other(String),
 }

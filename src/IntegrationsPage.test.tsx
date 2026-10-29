@@ -20,27 +20,48 @@ async function openIntegrations() {
 }
 
 describe("Integration cards", () => {
-  it("shows the platform identity and reveals connection setup on request", async () => {
+  it("opens browser sign-in without asking for an API key", async () => {
     const card = await openIntegrations();
+    const connect = vi.spyOn(api, "connectOakOs");
     expect(within(card).getByRole("img", { name: "OakOS logo" }).getAttribute("src")).toBeTruthy();
     expect(within(card).getByRole("heading", { name: "OakOS" })).toBeTruthy();
     expect(within(card).getByText(/Send recordings to your OakOS projects/)).toBeTruthy();
     expect(screen.queryByLabelText("Personal access token")).toBeNull();
     fireEvent.click(await screen.findByRole("button", { name: "Connect OakOS" }));
-    const token = screen.getByLabelText("Personal access token") as HTMLInputElement;
-    expect(token.type).toBe("password");
-    expect(document.activeElement).toBe(token);
-    fireEvent.change(token, { target: { value: "test-token" } });
+    await screen.findByText("Connected", { exact: true });
+    expect(connect).toHaveBeenCalledWith();
+  });
+
+  it("waits for approval and lets the user cancel and retry", async () => {
+    let rejectLogin!: (error: Error) => void;
+    vi.spyOn(api, "connectOakOs").mockImplementationOnce(() => new Promise((_, reject) => { rejectLogin = reject; }));
+    const cancel = vi.spyOn(api, "cancelOakOsLogin").mockImplementationOnce(async () => { rejectLogin(new Error("Sign-in canceled")); });
+    await openIntegrations();
+    fireEvent.click(await screen.findByRole("button", { name: "Connect OakOS" }));
+    expect((screen.getByRole("button", { name: "Waiting for sign-in…" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((await api.getOakOsIntegration()).connected).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await screen.findByText("Sign-in canceled");
+    expect(cancel).toHaveBeenCalledOnce();
     fireEvent.click(screen.getByRole("button", { name: "Connect OakOS" }));
-    expect((screen.getByLabelText("Personal access token") as HTMLInputElement).value).toBe("");
+    await screen.findByText("Connected", { exact: true });
+  });
+
+  it("cancels pending sign-in when leaving Integrations", async () => {
+    let rejectLogin!: (error: Error) => void;
+    vi.spyOn(api, "connectOakOs").mockImplementationOnce(() => new Promise((_, reject) => { rejectLogin = reject; }));
+    const cancel = vi.spyOn(api, "cancelOakOsLogin").mockImplementationOnce(async () => { rejectLogin(new Error("Sign-in canceled")); });
+    await openIntegrations();
+    fireEvent.click(await screen.findByRole("button", { name: "Connect OakOS" }));
+    fireEvent.click(screen.getByRole("button", { name: "Recordings" }));
+    await waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("button", { name: "Integrations" }));
+    expect((await screen.findByRole("button", { name: "Connect OakOS" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("shows publishing only after connection and hides it after disconnection", async () => {
     await openIntegrations();
     fireEvent.click(await screen.findByRole("button", { name: "Connect OakOS" }));
-    fireEvent.change(screen.getByLabelText("Personal access token"), { target: { value: "test-token" } });
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
     await screen.findByText("Connected", { exact: true });
     expect(screen.queryByLabelText("Personal access token")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Recordings" }));
@@ -56,13 +77,11 @@ describe("Integration cards", () => {
   });
 
   it("keeps setup available after a failed connection", async () => {
-    vi.spyOn(api, "connectOakOs").mockRejectedValueOnce(new Error("Invalid access token"));
+    vi.spyOn(api, "connectOakOs").mockRejectedValueOnce(new Error("Sign-in was declined"));
     await openIntegrations();
     fireEvent.click(await screen.findByRole("button", { name: "Connect OakOS" }));
-    fireEvent.change(screen.getByLabelText("Personal access token"), { target: { value: "invalid-token" } });
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
-    expect((await screen.findByRole("alert")).textContent).toBe("Invalid access token");
+    expect((await screen.findByRole("alert")).textContent).toBe("Sign-in was declined");
     expect((await api.getOakOsIntegration()).connected).toBe(false);
-    expect((screen.getByRole("button", { name: "Connect" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "Connect OakOS" }) as HTMLButtonElement).disabled).toBe(false);
   });
 });

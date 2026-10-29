@@ -25,6 +25,48 @@ The Dock and Command-Tab icon uses a glass version of the five-bar waveform, wit
 
 On macOS, the library sidebar uses the native Sidebar visual-effect material with a subtle theme tint. The material follows window focus and the app’s Light, Dark, or System appearance. The main content stays opaque, and Reduce Transparency uses an opaque sidebar. Windows and browser previews retain the standard solid sidebar.
 
+## OakOS connection
+
+In **Integrations → OakOS**, select **Connect OakOS**, sign in in your default browser,
+and approve project access and recording uploads. Return to Eavesdrop when authorization
+finishes. No API key or client secret is required. You can cancel sign-in, retry after a
+five-minute timeout, or select **Reconnect** if access expires or is revoked.
+
+Access and rotating refresh credentials stay in the operating system credential store,
+not in settings, recording exports, logs, or the web UI. Eavesdrop refreshes access before
+it expires. **Disconnect** revokes the OAuth connection in OakOS before removing local
+credentials; if the network is unavailable, retry disconnecting when online. Access can
+also be revoked under OakOS **Settings → API → Connected apps**. Existing personal-token
+connections continue working; a successful **Reconnect** replaces the locally stored token
+with OAuth credentials. It does not revoke the old personal token in OakOS, since other
+integrations may still use it.
+
+The desktop app uses authorization code + S256 PKCE, random state, and issuer validation.
+It listens only on `127.0.0.1:43821` during sign-in. If that port is occupied, close the other
+sign-in attempt and retry. The browser development preview simulates connection state;
+actual authentication and uploads run in the native app.
+
+### OakOS deployment prerequisite
+
+Deploy the coordinated `recording-integration` server support before releasing this client:
+
+1. Apply OakOS migration `0072` for OAuth recording rate limits and idempotency receipts.
+2. Set `OAKOS_MCP_ENABLED=true` and `OAKOS_NATIVE_RECORDINGS_ENABLED=true` with the canonical
+   origin `https://os.oak.dk`.
+3. Register the public desktop client once from the OakOS checkout using the deployment's
+   database and origin configuration:
+   `NODE_OPTIONS=--conditions=react-server npx tsx scripts/register-recording-client.ts eavesdrop-desktop`.
+   The script does not overwrite existing registrations.
+4. Verify sign-in, project selection, a synthetic recording upload, refresh, disconnect,
+   and reconnect against the deployed service before distributing the desktop update.
+
+The registered client is `eavesdrop-desktop` with the exact redirect
+`http://127.0.0.1:43821/oauth/oakos`, resource `https://os.oak.dk/api/v1`, and scopes
+`projects:read recordings:write offline_access`. It has no recording-read, Task, or MCP
+permissions. OAuth uses the existing `/api/auth/oauth2/authorize` and
+`/api/auth/oauth2/token` endpoints. Connection validation/revocation uses
+`GET` / `DELETE /api/v1/integrations/eavesdrop/connection`.
+
 ## Automatic processing
 
 **Settings → Transcription → Auto transcribe** starts transcription after a new recording is saved. **Settings → Summaries → Auto summarize** starts a summary after a successful transcription, including manual transcription. Both default to off, persist across restarts, and use the selected default processing source, model, and summary template. Enabling them does not process older recordings.

@@ -780,7 +780,7 @@ export function RecordingDetail({ recording, whisperModelPath, summaryModelPath,
       const projects = await api.listOakOsProjects();
       setPublishProjects(projects);
       setPublishProjectId("");
-      setPublishDialogError(projects.length ? null : "No OakOS projects are available for this token.");
+      setPublishDialogError(projects.length ? null : "No OakOS projects are available for your account.");
       setPublishDialogOpen(true);
     } catch (cause) {
       setPublishMessage({ kind: "error", text: cause instanceof Error ? cause.message : String(cause) });
@@ -986,7 +986,7 @@ export function RecordingDetail({ recording, whisperModelPath, summaryModelPath,
 
 function IntegrationsPage({ app }: { app: AppController }) {
   const [connected, setConnected] = useState<boolean | null>(null);
-  const [token, setToken] = useState("");
+  const loginActive = useRef(false);
   const [connecting, setConnecting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1002,22 +1002,27 @@ function IntegrationsPage({ app }: { app: AppController }) {
         setError(cause instanceof Error ? cause.message : String(cause));
       }
     });
-    return () => { disposed = true; };
+    return () => {
+      disposed = true;
+      if (loginActive.current) void api.cancelOakOsLogin().catch(() => {});
+    };
   }, []);
 
   const connect = async () => {
-    if (busy || !token.trim()) return;
+    if (busy) return;
+    loginActive.current = true;
+    setConnecting(true);
     setBusy(true);
     setError(null);
     try {
-      const integration = await api.connectOakOs(token);
+      const integration = await api.connectOakOs();
       setConnected(integration.connected);
-      setToken("");
-      setConnecting(false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
+      loginActive.current = false;
       setBusy(false);
+      setConnecting(false);
     }
   };
 
@@ -1028,10 +1033,10 @@ function IntegrationsPage({ app }: { app: AppController }) {
       const updated = await app.disconnectOakOs();
       if (updated) {
         setConnected(false);
-        setConnecting(false);
       }
     } finally {
       setBusy(false);
+      setConnecting(false);
     }
   };
 
@@ -1044,20 +1049,21 @@ function IntegrationsPage({ app }: { app: AppController }) {
           {error && <p className="integration-error" role="alert">{error}</p>}
           {connected ? (
             <div className="integration-connected">
-              <p>Choose a project each time you publish a recording.</p>
-              <button className="button secondary" disabled={busy} onClick={() => void disconnect()}>{busy ? "Disconnecting…" : "Disconnect"}</button>
+              <p>{connecting ? "Complete sign-in and approve access in your browser." : "Choose a project each time you publish a recording."}</p>
+              <div className="integration-actions">
+                <button className="button secondary" disabled={busy} onClick={() => void connect()}>{connecting ? "Waiting for sign-in…" : "Reconnect"}</button>
+                {connecting && <button className="button secondary" onClick={() => void api.cancelOakOsLogin().catch((cause) => setError(String(cause)))}>Cancel</button>}
+                <button className="button secondary" disabled={busy} onClick={() => void disconnect()}>{busy && !connecting ? "Disconnecting…" : "Disconnect"}</button>
+              </div>
             </div>
           ) : connected === false ? (
-            connecting ? <form className="integration-connect-form" onSubmit={(event) => { event.preventDefault(); void connect(); }}>
-              <label className="field-label" htmlFor="oakos-token">Personal access token
-                <input id="oakos-token" type="password" value={token} autoFocus autoComplete="off" spellCheck={false} placeholder="oakos_pat_…" disabled={busy} onChange={(event) => setToken(event.target.value)} />
-              </label>
-              <p>Your token is stored securely on this computer.</p>
+            <div className="integration-connect-form">
+              <p>{connecting ? "Complete sign-in and approve access in your browser. This window will update when you’re connected." : "Sign in to OakOS in your browser and approve access to your projects and recording uploads."}</p>
               <div className="integration-actions">
-                <button className="button secondary" type="button" disabled={busy} onClick={() => { setConnecting(false); setToken(""); setError(null); }}>Cancel</button>
-                <button className="button primary" type="submit" disabled={busy || !token.trim()}>{busy ? "Connecting…" : "Connect"}</button>
+                <button className="button primary" disabled={busy} onClick={() => void connect()}>{connecting ? "Waiting for sign-in…" : "Connect OakOS"}</button>
+                {connecting && <button className="button secondary" onClick={() => void api.cancelOakOsLogin().catch((cause) => setError(String(cause)))}>Cancel</button>}
               </div>
-            </form> : <button className="button secondary" onClick={() => setConnecting(true)}>Connect OakOS</button>
+            </div>
           ) : <button className="button secondary" disabled>Checking connection…</button>}
         </IntegrationCard>
       </div>

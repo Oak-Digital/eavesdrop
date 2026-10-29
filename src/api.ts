@@ -174,11 +174,14 @@ export async function getOakOsIntegration(): Promise<OakOsIntegration> {
   return { connected: browserOakOsConnected };
 }
 
-export async function connectOakOs(token: string): Promise<OakOsIntegration> {
-  if (isTauri()) return command<OakOsIntegration>("connect_oakos", { token });
-  if (!token.trim()) throw new Error("enter an OakOS personal access token");
+export async function connectOakOs(): Promise<OakOsIntegration> {
+  if (isTauri()) return command<OakOsIntegration>("connect_oakos");
   browserOakOsConnected = true;
   return { connected: true };
+}
+
+export async function cancelOakOsLogin(): Promise<void> {
+  if (isTauri()) return command<void>("cancel_oakos_login");
 }
 
 export async function disconnectOakOs(): Promise<AppSnapshot> {

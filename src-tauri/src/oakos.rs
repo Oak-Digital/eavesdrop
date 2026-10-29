@@ -2,6 +2,7 @@ use reqwest::{StatusCode, Url, blocking::Client, header};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
+use crate::oakos_oauth;
 
 const API_BASE_URL: &str = "https://os.oak.dk/api/v1/";
 const KEYRING_SERVICE: &str = "com.eavesdrop.recorder";
@@ -60,6 +61,9 @@ struct ApiError {
 }
 
 pub fn integration() -> AppResult<OakOsIntegration> {
+    if oakos_oauth::load()?.is_some() {
+        return Ok(OakOsIntegration { connected: true });
+    }
     match token_entry()?.get_password() {
         Ok(_) => Ok(OakOsIntegration { connected: true }),
         Err(keyring::Error::NoEntry) => Ok(OakOsIntegration { connected: false }),
@@ -67,22 +71,26 @@ pub fn integration() -> AppResult<OakOsIntegration> {
     }
 }
 
-pub fn connect(token: &str) -> AppResult<OakOsIntegration> {
-    let normalized = token.trim();
-    if normalized.is_empty() {
-        return Err(AppError::Other(
-            "enter an OakOS personal access token".into(),
-        ));
-    }
-    let client = OakOsClient::new(normalized)?;
-    client.list_projects()?;
-    token_entry()?
-        .set_password(normalized)
-        .map_err(|error| AppError::Crypto(error.to_string()))?;
+pub fn connect(login: oakos_oauth::LoginGuard) -> AppResult<OakOsIntegration> {
+    oakos_oauth::connect(login)?;
+    // Only remove a legacy PAT after OAuth has been verified and saved successfully.
+    delete_legacy_token()?;
     Ok(OakOsIntegration { connected: true })
 }
 
 pub fn disconnect() -> AppResult<()> {
+    oakos_oauth::cancel()?;
+    let _lock = oakos_oauth::CREDENTIALS
+        .lock()
+        .map_err(|_| AppError::Other("OakOS credential storage is busy".into()))?;
+    if let Some(credentials) = oakos_oauth::load()? {
+        oakos_oauth::revoke(credentials)?;
+        oakos_oauth::delete()?;
+    }
+    delete_legacy_token()
+}
+
+fn delete_legacy_token() -> AppResult<()> {
     match token_entry()?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(error) => Err(AppError::Crypto(error.to_string())),
@@ -108,10 +116,16 @@ fn token_entry() -> AppResult<keyring::Entry> {
 }
 
 fn client_from_keyring() -> AppResult<OakOsClient> {
+    let _lock = oakos_oauth::CREDENTIALS
+        .lock()
+        .map_err(|_| AppError::Other("OakOS credential storage is busy".into()))?;
+    if let Some(credentials) = oakos_oauth::load()? {
+        return OakOsClient::new(&oakos_oauth::access_token(credentials)?);
+    }
     let token = token_entry()?.get_password().map_err(|error| match error {
-        keyring::Error::NoEntry => AppError::Other(
-            "OakOS is not connected. Add a personal access token in Integrations.".into(),
-        ),
+        keyring::Error::NoEntry => {
+            AppError::Other("OakOS is not connected. Sign in from Integrations.".into())
+        }
         other => AppError::Crypto(other.to_string()),
     })?;
     OakOsClient::new(&token)
@@ -127,6 +141,9 @@ impl OakOsClient {
     fn new(token: &str) -> AppResult<Self> {
         let http = Client::builder()
             .user_agent(concat!("Eavesdrop/", env!("CARGO_PKG_VERSION")))
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(300))
             .build()
             .map_err(network_error)?;
         let base_url = Url::parse(API_BASE_URL)
@@ -237,8 +254,8 @@ fn checked(response: reqwest::blocking::Response) -> AppResult<reqwest::blocking
                 .to_string()
         });
     let hint = match status {
-        StatusCode::UNAUTHORIZED => " Check the personal access token in Integrations.",
-        StatusCode::FORBIDDEN => " The token does not have permission for this operation.",
+        StatusCode::UNAUTHORIZED => " Reconnect OakOS in Integrations.",
+        StatusCode::FORBIDDEN => " Your connection does not have permission for this operation.",
         StatusCode::TOO_MANY_REQUESTS => " Try again in a moment.",
         _ => "",
     };

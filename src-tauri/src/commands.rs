@@ -64,16 +64,26 @@ pub fn get_oakos_integration() -> AppResult<OakOsIntegration> {
 }
 
 #[tauri::command]
-pub async fn connect_oakos(token: String) -> AppResult<OakOsIntegration> {
-    tauri::async_runtime::spawn_blocking(move || oakos::connect(&token))
+pub async fn connect_oakos() -> AppResult<OakOsIntegration> {
+    let login = crate::oakos_oauth::LoginGuard::start()?;
+    tauri::async_runtime::spawn_blocking(move || oakos::connect(login))
         .await
         .map_err(|error| AppError::Other(format!("OakOS connection task failed: {error}")))?
 }
 
 #[tauri::command]
-pub fn disconnect_oakos(state: State<'_, AppState>) -> AppResult<AppSnapshot> {
-    oakos::disconnect()?;
-    state.snapshot(false)
+pub fn cancel_oakos_login() -> AppResult<()> {
+    crate::oakos_oauth::cancel()
+}
+
+#[tauri::command]
+pub async fn disconnect_oakos(app: AppHandle) -> AppResult<AppSnapshot> {
+    tauri::async_runtime::spawn_blocking(move || {
+        oakos::disconnect()?;
+        app.state::<AppState>().snapshot(false)
+    })
+    .await
+    .map_err(|error| AppError::Other(format!("OakOS disconnect task failed: {error}")))?
 }
 
 #[tauri::command]
