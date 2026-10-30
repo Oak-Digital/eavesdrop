@@ -1,3 +1,7 @@
+mod echo;
+
+use echo::{CleanFrame, EchoProcessor, Frame};
+
 use std::{
     collections::VecDeque,
     fs,
@@ -438,25 +442,12 @@ fn capture_worker(
     let mut capture_started = Instant::now();
     let mut system_stall_warned = false;
 
-    #[cfg(feature = "aec3")]
-    let echo_processor = {
-        use webrtc_audio_processing::Processor;
-        use webrtc_audio_processing_config::{Config, EchoCanceller};
-        let processor = Processor::new(SAMPLE_RATE as i32)
-            .map_err(|error| AppError::Audio(format!("AEC3 initialization failed: {error:?}")))?;
-        processor.set_config(Config {
-            echo_canceller: Some(EchoCanceller::default()),
-            ..Default::default()
-        });
-        processor
-    };
+    let mut echo_processor = EchoProcessor::new();
 
     loop {
         match receiver.recv_timeout(Duration::from_millis(100)) {
             Ok(CaptureMessage::Samples(chunk)) if !paused => match chunk.source {
                 SourceKind::Microphone => {
-                    mic_target = chunk.level;
-                    last_mic_sample = Some(Instant::now());
                     microphone.extend(chunk.samples);
                 }
                 SourceKind::System if mode == CaptureMode::Online => {
@@ -469,6 +460,20 @@ fn capture_worker(
                 SourceKind::System => {}
             },
             Ok(CaptureMessage::Pause) => {
+                // Flush the lookahead before discarding paused callbacks, then
+                // relearn the acoustic path when recording resumes.
+                let before = segment.len();
+                drain_frames(
+                    mode,
+                    &mut microphone,
+                    &mut system,
+                    &mut segment,
+                    true,
+                    &mut echo_processor,
+                );
+                playable_samples += (segment.len() - before) as u64;
+                report_echo_warning(&app, &mut echo_processor, &mut warning);
+                echo_processor.reset();
                 paused = true;
                 mic_level = 0.0;
                 system_level = 0.0;
@@ -498,11 +503,15 @@ fn capture_worker(
                     &mut system,
                     &mut segment,
                     true,
-                    #[cfg(feature = "aec3")]
-                    &echo_processor,
+                    &mut echo_processor,
                 );
                 playable_samples += (segment.len() - before) as u64;
+                report_echo_warning(&app, &mut echo_processor, &mut warning);
+                echo_processor.reset();
                 system.clear();
+                mic_level = 0.0;
+                mic_target = 0.0;
+                last_mic_sample = None;
                 mode = next;
                 system_level = 0.0;
                 system_target = 0.0;
@@ -536,10 +545,10 @@ fn capture_worker(
                     &mut system,
                     &mut segment,
                     true,
-                    #[cfg(feature = "aec3")]
-                    &echo_processor,
+                    &mut echo_processor,
                 );
                 playable_samples += (segment.len() - before) as u64;
+                report_echo_warning(&app, &mut echo_processor, &mut warning);
                 flush_segment(&mut segment, &journal_path, &key, true)?;
                 break;
             }
@@ -547,6 +556,21 @@ fn capture_worker(
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Ok(CaptureMessage::Samples(_)) => {}
         }
+
+        let before = segment.len();
+        if let Some(level) = drain_frames(
+            mode,
+            &mut microphone,
+            &mut system,
+            &mut segment,
+            false,
+            &mut echo_processor,
+        ) {
+            mic_target = level;
+            last_mic_sample = Some(Instant::now());
+        }
+        playable_samples += (segment.len() - before) as u64;
+        report_echo_warning(&app, &mut echo_processor, &mut warning);
 
         if !paused && last_meter_emit.elapsed() >= METER_EMIT_INTERVAL {
             let now = Instant::now();
@@ -580,17 +604,6 @@ fn capture_worker(
             );
             last_meter_emit = now;
         }
-        let before = segment.len();
-        drain_frames(
-            mode,
-            &mut microphone,
-            &mut system,
-            &mut segment,
-            false,
-            #[cfg(feature = "aec3")]
-            &echo_processor,
-        );
-        playable_samples += (segment.len() - before) as u64;
         while segment.len() >= SEGMENT_SAMPLES {
             let tail = segment.split_off(SEGMENT_SAMPLES);
             flush_segment(&mut segment, &journal_path, &key, false)?;
@@ -626,87 +639,77 @@ fn capture_worker(
     })
 }
 
+fn report_echo_warning(
+    app: &AppHandle,
+    processor: &mut EchoProcessor,
+    warning: &mut Option<String>,
+) {
+    if processor.take_warning() {
+        let message = "Echo cancellation stopped working. Your microphone is still being recorded, but speakers may cause echo. Headphones can help.".to_string();
+        *warning = Some(message.clone());
+        let _ = app.emit("capture-warning", message);
+    }
+}
+
 fn drain_frames(
     mode: CaptureMode,
     microphone: &mut VecDeque<f32>,
     system: &mut VecDeque<f32>,
     output: &mut Vec<f32>,
     finishing: bool,
-    #[cfg(feature = "aec3")] echo_processor: &webrtc_audio_processing::Processor,
-) {
+    echo_processor: &mut EchoProcessor,
+) -> Option<f32> {
+    let mut mic_level: Option<f32> = None;
     loop {
         let mic_ready = microphone.len() >= FRAME_SAMPLES;
         let system_ready = system.len() >= FRAME_SAMPLES;
         let can_fill_missing =
             finishing || microphone.len() > FRAME_SAMPLES * 10 || system.len() > FRAME_SAMPLES * 10;
-        if mode == CaptureMode::InPerson && !mic_ready {
+        if microphone.is_empty() && system.is_empty() {
+            break;
+        }
+        if mode == CaptureMode::InPerson && !mic_ready && !finishing {
             break;
         }
         if mode == CaptureMode::Online && !(mic_ready && system_ready) && !can_fill_missing {
             break;
         }
-        if !mic_ready && !system_ready {
-            break;
-        }
 
-        let mut mic_frame = take_frame(microphone);
-        let system_frame = if mode == CaptureMode::Online {
-            take_frame(system)
-        } else {
-            vec![0.0; FRAME_SAMPLES]
-        };
-
-        #[cfg(feature = "aec3")]
+        let mic_frame = take_frame(microphone);
         if mode == CaptureMode::Online {
-            let mut render = vec![system_frame.clone()];
-            let mut capture = vec![mic_frame];
-            if echo_processor.process_render_frame(&mut render).is_ok()
-                && echo_processor.process_capture_frame(&mut capture).is_ok()
-            {
-                mic_frame = capture.remove(0);
-            } else {
-                mic_frame = adaptive_echo_suppression(&mic_frame, &system_frame);
+            let system_frame = take_frame(system);
+            if let Some(frame) = echo_processor.push(mic_frame, system_frame) {
+                append_clean_frame(frame, output, &mut mic_level);
             }
-        }
-        #[cfg(not(feature = "aec3"))]
-        if mode == CaptureMode::Online {
-            mic_frame = adaptive_echo_suppression(&mic_frame, &system_frame);
-        }
-
-        for index in 0..FRAME_SAMPLES {
-            let mixed = if mode == CaptureMode::Online {
-                mic_frame[index] * 0.78 + system_frame[index] * 0.78
-            } else {
-                mic_frame[index]
-            };
-            output.push(soft_limit(mixed));
+        } else {
+            system.clear();
+            let level = meter_level(&mic_frame);
+            mic_level = Some(mic_level.unwrap_or(0.0).max(level));
+            output.extend(mic_frame.into_iter().map(soft_limit));
         }
     }
+    if finishing {
+        while let Some(frame) = echo_processor.flush() {
+            append_clean_frame(frame, output, &mut mic_level);
+        }
+    }
+    mic_level
 }
 
-fn take_frame(queue: &mut VecDeque<f32>) -> Vec<f32> {
-    (0..FRAME_SAMPLES)
-        .map(|_| queue.pop_front().unwrap_or(0.0))
-        .collect()
+fn append_clean_frame(frame: CleanFrame, output: &mut Vec<f32>, mic_level: &mut Option<f32>) {
+    let level = meter_level(&frame.microphone);
+    *mic_level = Some(mic_level.unwrap_or(0.0).max(level));
+    output.extend(
+        frame
+            .microphone
+            .iter()
+            .zip(frame.system)
+            .map(|(mic, system)| soft_limit(mic * 0.78 + system * 0.78)),
+    );
 }
 
-fn adaptive_echo_suppression(microphone: &[f32], system: &[f32]) -> Vec<f32> {
-    let cross = microphone
-        .iter()
-        .zip(system)
-        .map(|(mic, sys)| mic * sys)
-        .sum::<f32>();
-    let system_energy = system
-        .iter()
-        .map(|sample| sample * sample)
-        .sum::<f32>()
-        .max(1e-6);
-    let coefficient = (cross / system_energy).clamp(0.0, 0.75);
-    microphone
-        .iter()
-        .zip(system)
-        .map(|(mic, sys)| mic - sys * coefficient)
-        .collect()
+fn take_frame(queue: &mut VecDeque<f32>) -> Frame {
+    std::array::from_fn(|_| queue.pop_front().unwrap_or(0.0))
 }
 
 fn soft_limit(sample: f32) -> f32 {
@@ -934,15 +937,129 @@ mod tests {
     }
 
     #[test]
-    fn fallback_echo_suppression_reduces_correlated_energy() {
-        let system: Vec<f32> = (0..FRAME_SAMPLES)
-            .map(|index| (index as f32 / 8.0).sin() * 0.4)
+    fn mic_only_bypasses_aec_and_keeps_partial_final_frame() {
+        let samples = echo::tests::signal(FRAME_SAMPLES * 2 + 37, 123);
+        let mut microphone = VecDeque::from(samples.clone());
+        let mut system = VecDeque::new();
+        let mut output = Vec::new();
+        let mut processor = EchoProcessor::new();
+        let level = drain_frames(
+            CaptureMode::InPerson,
+            &mut microphone,
+            &mut system,
+            &mut output,
+            true,
+            &mut processor,
+        )
+        .unwrap();
+        assert_eq!(&output[..samples.len()], samples);
+        assert_eq!(output.len(), FRAME_SAMPLES * 3);
+        assert!(output[samples.len()..].iter().all(|x| *x == 0.0));
+        assert!(level > 0.0);
+        assert!(microphone.is_empty());
+    }
+
+    #[test]
+    fn online_meter_measures_cleaned_microphone_with_uneven_callbacks() {
+        let system_samples = echo::tests::signal(SAMPLE_RATE as usize * 10, 123);
+        let microphone_samples = echo::tests::echo(&system_samples, 48 * 70);
+        let mut microphone = VecDeque::new();
+        let mut system = VecDeque::new();
+        let mut output = Vec::new();
+        let mut processor = EchoProcessor::new();
+        let mut clean_levels = Vec::new();
+        // Different callback sizes and mic-first delivery exercise reblocking
+        // and the lookahead instead of calling AEC directly with aligned frames.
+        let mut mic_offset = 0;
+        let mut system_offset = 0;
+        while mic_offset < microphone_samples.len() || system_offset < system_samples.len() {
+            let mic_end = (mic_offset + 512).min(microphone_samples.len());
+            microphone.extend(&microphone_samples[mic_offset..mic_end]);
+            mic_offset = mic_end;
+            if let Some(level) = drain_frames(
+                CaptureMode::Online,
+                &mut microphone,
+                &mut system,
+                &mut output,
+                false,
+                &mut processor,
+            ) {
+                clean_levels.push(level);
+            }
+            let system_end = (system_offset + 1024).min(system_samples.len());
+            if system_offset < mic_offset {
+                system.extend(&system_samples[system_offset..system_end]);
+                system_offset = system_end;
+            }
+            if let Some(level) = drain_frames(
+                CaptureMode::Online,
+                &mut microphone,
+                &mut system,
+                &mut output,
+                false,
+                &mut processor,
+            ) {
+                clean_levels.push(level);
+            }
+        }
+        drain_frames(
+            CaptureMode::Online,
+            &mut microphone,
+            &mut system,
+            &mut output,
+            true,
+            &mut processor,
+        );
+        assert_eq!(output.len(), system_samples.len());
+        let cleaned = &clean_levels[clean_levels.len() - 100..];
+        let clean_mean = cleaned.iter().sum::<f32>() / cleaned.len() as f32;
+        let raw = meter_level(&microphone_samples[microphone_samples.len() - 48_000..]);
+        assert!(clean_mean < raw * 0.5, "clean {clean_mean}, raw {raw}");
+        // Echo suppression must leave the direct computer recording audible.
+        let tail = output.len() - 48_000;
+        let error: Vec<_> = output[tail..]
+            .iter()
+            .zip(&system_samples[tail..])
+            .map(|(mixed, sys)| mixed - sys * 0.78)
             .collect();
-        let microphone: Vec<f32> = system.iter().map(|sample| sample * 0.5).collect();
-        let cleaned = adaptive_echo_suppression(&microphone, &system);
-        let before: f32 = microphone.iter().map(|sample| sample * sample).sum();
-        let after: f32 = cleaned.iter().map(|sample| sample * sample).sum();
-        assert!(after < before * 0.1);
+        assert!(echo::tests::energy(&error) < echo::tests::energy(&system_samples[tail..]) * 0.01);
+    }
+
+    #[test]
+    fn source_transition_flushes_lookahead_without_leaking_into_mic_only() {
+        let mut processor = EchoProcessor::new();
+        let mut microphone = VecDeque::from(vec![0.0; FRAME_SAMPLES * 3]);
+        let mut system = VecDeque::from(vec![0.1; FRAME_SAMPLES * 3]);
+        let mut output = Vec::new();
+        drain_frames(
+            CaptureMode::Online,
+            &mut microphone,
+            &mut system,
+            &mut output,
+            false,
+            &mut processor,
+        );
+        assert!(output.is_empty(), "short audio is still in lookahead");
+        drain_frames(
+            CaptureMode::Online,
+            &mut microphone,
+            &mut system,
+            &mut output,
+            true,
+            &mut processor,
+        );
+        assert_eq!(output.len(), FRAME_SAMPLES * 3);
+        processor.reset();
+        microphone.extend([0.2; FRAME_SAMPLES]);
+        drain_frames(
+            CaptureMode::InPerson,
+            &mut microphone,
+            &mut system,
+            &mut output,
+            true,
+            &mut processor,
+        );
+        assert_eq!(&output[FRAME_SAMPLES * 3..], &[0.2; FRAME_SAMPLES]);
     }
 
     #[test]

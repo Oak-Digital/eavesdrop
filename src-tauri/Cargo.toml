@@ -1,10 +1,10 @@
 [package]
 name = "eavesdrop"
-version = "0.1.28"
+version = "0.1.29"
 description = "A private cross-platform meeting recorder"
 authors = ["Eavesdrop"]
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.91"
 
 [lib]
 name = "eavesdrop_lib"
@@ -18,7 +18,8 @@ crate-type = ["rlib"]
 
 [features]
 default = []
-aec3 = ["dep:webrtc-audio-processing", "dep:webrtc-audio-processing-config"]
+# Compatibility with older build commands; AEC3 is now always included.
+aec3 = []
 
 # The summary engine is a separate binary so that llama.cpp's ggml and
 # whisper.cpp's never meet in one link. See summarizer/src/main.rs.
@@ -56,8 +57,7 @@ tauri-plugin-updater = "2.10.1"
 thiserror = "2"
 uuid = { version = "1.21", features = ["v4", "serde"] }
 whisper-rs = "0.16"
-webrtc-audio-processing = { version = "2.1", features = ["bundled"], optional = true }
-webrtc-audio-processing-config = { version = "2.1", optional = true }
+sonora = "=0.2.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 screencapturekit = { version = "8.0", features = ["macos_13_0"] }

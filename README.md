@@ -4,7 +4,7 @@ Eavesdrop is a tray-first meeting recorder for macOS 13+ and Windows 10/11. It r
 
 ## Run locally
 
-Prerequisites: Node.js 20+, Rust 1.88+, CMake, the Tauri 2 platform prerequisites, and full Xcode on macOS or Visual Studio Build Tools with the Windows SDK on Windows.
+Prerequisites: Node.js 20+, Rust 1.91+, CMake, the Tauri 2 platform prerequisites, and full Xcode on macOS or Visual Studio Build Tools with the Windows SDK on Windows.
 
 ```sh
 npm install
@@ -122,7 +122,9 @@ cargo clippy --all-targets --no-default-features -- -D warnings
 cargo test --lib --no-default-features
 ```
 
-The default build uses a lightweight correlation-based echo suppressor. A bundled WebRTC AEC3 build is available with `cargo build --features aec3`; it requires Meson and a working native C/C++ toolchain.
+Computer + mic recordings always use WebRTC AEC3 through [Sonora](https://github.com/dignifiedquire/sonora), a pure Rust implementation. Computer audio is the echo reference; only the microphone is cleaned before mixing. The mic meter shows the cleaned signal. A 120 ms lookahead allows for capture callback skew, and AEC estimates the speaker/room delay. Pause/resume and source changes flush buffered audio and reset the filter. Mic-only recordings bypass AEC. No Meson or extra native AEC libraries are required; the legacy `aec3` feature flag is accepted as a no-op.
+
+AEC needs a short period to adapt and cannot guarantee perfect isolation for every speaker, room or audio device. Before shipping an audio change, check speaker-only playback, speaking over playback, headphones, pause/resume, source toggles and output-device changes on real hardware. Automated tests use generated signals only.
 
 ## Packaging
 
